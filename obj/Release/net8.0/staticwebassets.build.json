@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "iAXfOOGTm+GkPWTf8ngQVys5P2NPaqBBTToP3MwbPqs=",
+  "Source": "DropInBadAPI",
+  "BasePath": "_content/DropInBadAPI",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}
