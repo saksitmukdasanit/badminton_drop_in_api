@@ -1,12 +1,12 @@
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Interfaces;
+using DropInBadAPI.Models; // << ตรวจสอบว่า using Response ของคุณอยู่ที่นี่
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
 namespace DropInBadAPI.Controllers
 {
-
     [ApiController]
     [Route("api/[controller]")]
     public class AuthController : ControllerBase
@@ -19,64 +19,78 @@ namespace DropInBadAPI.Controllers
         }
 
         [HttpPost("register")]
-        public async Task<IActionResult> InitiateRegistration([FromBody] InitiateRegisterDto dto)
+        public async Task<ActionResult<Response<object>>> InitiateRegistration([FromBody] InitiateRegisterDto dto)
         {
             var (success, errorMessage) = await _authService.InitiateRegistrationAsync(dto);
-            if (!success) return BadRequest(errorMessage);
-            return Ok("Registration initiated. Please verify OTP.");
+
+            if (!success)
+            {
+                // ส่ง Response กลางกลับไปในกรณีที่ Error
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            // ส่ง Response กลางกลับไปในกรณีที่สำเร็จ
+            return Ok(new Response<object> { Status = 200, Message = "Registration initiated. Please verify OTP." });
         }
 
         [HttpPost("verify-otp")]
-        public async Task<ActionResult<LoginResponseDto>> VerifyOtp([FromBody] VerifyOtpDto dto)
+        public async Task<ActionResult<Response<LoginResponseDto>>> VerifyOtp([FromBody] VerifyOtpDto dto)
         {
             var (accessToken, refreshToken, errorMessage) = await _authService.VerifyOtpAndLoginAsync(dto);
-            if (string.IsNullOrEmpty(accessToken)) return BadRequest(errorMessage);
-            return Ok(new LoginResponseDto(accessToken, refreshToken!));
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            var data = new LoginResponseDto(accessToken, refreshToken!);
+            return Ok(new Response<LoginResponseDto> { Status = 200, Message = "OTP verified successfully.", Data = data });
         }
 
         [HttpPut("complete-profile")]
-        [Authorize] // ต้องใช้ Token จากขั้นตอนที่ 2 ถึงจะเรียกได้
-        public async Task<IActionResult> CompleteProfile([FromBody] CompleteProfileDto dto)
+        [Authorize]
+        public async Task<ActionResult<Response<object>>> CompleteProfile([FromBody] CompleteProfileDto dto)
         {
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             var (success, errorMessage) = await _authService.CompleteUserProfileAsync(int.Parse(userIdString!), dto);
 
-            if (!success) return NotFound(errorMessage);
+            if (!success)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = errorMessage });
+            }
 
-            return Ok("Profile completed successfully.");
+            return Ok(new Response<object> { Status = 200, Message = "Profile completed successfully." });
         }
 
         [HttpPost("login")]
-        public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginDto loginDto)
+        public async Task<ActionResult<Response<LoginResponseDto>>> Login([FromBody] LoginDto loginDto)
         {
             var (accessToken, refreshToken) = await _authService.LoginUserAsync(loginDto);
             if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(refreshToken))
             {
-                return Unauthorized("Invalid username or password.");
+                return Unauthorized(new Response<object> { Status = 401, Message = "Invalid username or password." });
             }
-
-            return Ok(new LoginResponseDto(accessToken, refreshToken));
+            
+            var data = new LoginResponseDto(accessToken, refreshToken);
+            return Ok(new Response<LoginResponseDto> { Status = 200, Message = "Login successful.", Data = data });
         }
 
-        // Endpoint นี้จะยังเรียกใช้ไม่ได้จนกว่าจะใส่ระบบ JWT
-
-
         [HttpPost("refresh")]
-        public async Task<ActionResult<LoginResponseDto>> Refresh([FromBody] RefreshTokenDto tokenDto)
+        public async Task<ActionResult<Response<LoginResponseDto>>> Refresh([FromBody] RefreshTokenDto tokenDto)
         {
             var (newAccessToken, newRefreshToken) = await _authService.RefreshTokenAsync(tokenDto.AccessToken, tokenDto.RefreshToken);
 
             if (string.IsNullOrEmpty(newAccessToken) || string.IsNullOrEmpty(newRefreshToken))
             {
-                return Unauthorized("Invalid tokens.");
+                return Unauthorized(new Response<object> { Status = 401, Message = "Invalid tokens." });
             }
 
-            return Ok(new LoginResponseDto(newAccessToken, newRefreshToken));
+            var data = new LoginResponseDto(newAccessToken, newRefreshToken);
+            return Ok(new Response<LoginResponseDto> { Status = 200, Message = "Token refreshed successfully.", Data = data });
         }
 
         [HttpPost("change-password")]
         [Authorize]
-        public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto changePasswordDto)
+        public async Task<ActionResult<Response<object>>> ChangePassword([FromBody] ChangePasswordDto changePasswordDto)
         {
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userIdString))
@@ -88,15 +102,15 @@ namespace DropInBadAPI.Controllers
 
             if (!success)
             {
-                return BadRequest(errorMessage);
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             }
 
-            return Ok("Password changed successfully.");
+            return Ok(new Response<object> { Status = 200, Message = "Password changed successfully." });
         }
 
         [HttpGet("me")]
         [Authorize]
-        public async Task<IActionResult> GetMyProfile()
+        public async Task<ActionResult<Response<UserProfileDto>>> GetMyProfile()
         {
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(userIdString))
@@ -109,35 +123,36 @@ namespace DropInBadAPI.Controllers
 
             if (userProfile == null)
             {
-                return NotFound();
+                return NotFound(new Response<object> { Status = 404, Message = "User profile not found." });
             }
 
-            return Ok(userProfile);
+            return Ok(new Response<UserProfileDto> { Status = 200, Message = "Profile retrieved successfully.", Data = userProfile });
         }
 
         [HttpPost("forgot-password/request-otp")]
-        [AllowAnonymous] // ทุกคนต้องเรียกได้
+        [AllowAnonymous]
         public async Task<IActionResult> RequestPasswordReset([FromBody] RequestOtpDto dto)
         {
             await _authService.RequestPasswordResetOtpAsync(dto);
-            // คืนค่า 200 OK เสมอ ไม่ว่าเบอร์โทรจะถูกหรือผิด เพื่อความปลอดภัย
-            return Ok("If a matching account was found, an OTP has been sent.");
+            return Ok(new Response<object> { Status = 200, Message = "If a matching account was found, an OTP has been sent." });
         }
 
         [HttpPost("forgot-password/verify-otp")]
         [AllowAnonymous]
-        public async Task<ActionResult<ResetTokenResponseDto>> VerifyPasswordResetOtp([FromBody] VerifyOtpDto dto)
+        public async Task<ActionResult<Response<ResetTokenResponseDto>>> VerifyPasswordResetOtp([FromBody] VerifyOtpDto dto)
         {
             var (resetToken, errorMessage) = await _authService.VerifyPasswordResetOtpAsync(dto);
             if (string.IsNullOrEmpty(resetToken))
             {
-                return BadRequest(errorMessage);
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             }
-            return Ok(new ResetTokenResponseDto(resetToken));
+            
+            var data = new ResetTokenResponseDto(resetToken);
+            return Ok(new Response<ResetTokenResponseDto> { Status = 200, Message = "OTP verified. Please use the reset token to set a new password.", Data = data });
         }
 
         [HttpPost("forgot-password/reset")]
-        [Authorize] // ต้องใช้ "Reset Token" ที่ได้จากขั้นตอนที่แล้วถึงจะเรียกได้
+        [Authorize]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
         {
             var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -145,9 +160,9 @@ namespace DropInBadAPI.Controllers
 
             if (!success)
             {
-                return BadRequest(errorMessage);
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             }
-            return Ok("Password has been reset successfully.");
+            return Ok(new Response<object> { Status = 200, Message = "Password has been reset successfully." });
         }
     }
 }

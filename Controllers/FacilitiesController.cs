@@ -1,5 +1,5 @@
-using DropInBadAPI.Interfaces; // << เปลี่ยน
-using DropInBadAPI.Models;
+using DropInBadAPI.Interfaces;
+using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
 using Microsoft.AspNetCore.Mvc;
 
 namespace DropInBadAPI.Controllers
@@ -17,72 +17,83 @@ namespace DropInBadAPI.Controllers
 
         // GET: api/Facilities
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Facility>>> GetFacilities()
+        public async Task<ActionResult<Response<IEnumerable<Facility>>>> GetFacilities()
         {
             var facilities = await _facilityService.GetAllActiveAsync();
-            return Ok(facilities);
+            var response = new Response<IEnumerable<Facility>>
+            {
+                Status = 200,
+                Message = "Facilities retrieved successfully.",
+                Data = facilities
+            };
+            return Ok(response);
         }
 
         // GET: api/Facilities/5
         [HttpGet("{id}")]
-        public async Task<ActionResult<Facility>> GetFacility(int id)
+        public async Task<ActionResult<Response<Facility>>> GetFacility(int id)
         {
             var facility = await _facilityService.GetByIdAsync(id);
 
             if (facility == null)
             {
-                return NotFound(); // คืนค่า 404 Not Found ถ้าไม่เจอข้อมูล
+                return NotFound(new Response<object> { Status = 404, Message = "Facility not found." });
             }
 
-            return Ok(facility);
+            return Ok(new Response<Facility> { Status = 200, Message = "Facility retrieved successfully.", Data = facility });
         }
 
         // POST: api/Facilities
         [HttpPost]
-        public async Task<ActionResult<Facility>> CreateFacility([FromBody] Facility facility)
+        public async Task<ActionResult<Response<Facility>>> CreateFacility([FromBody] Facility facility)
         {
             if (facility == null)
             {
-                return BadRequest();
+                return BadRequest(new Response<object> { Status = 400, Message = "Facility data is required." });
             }
 
             var newFacility = await _facilityService.AddAsync(facility);
 
-            // คืนค่า 201 Created พร้อมข้อมูลที่เพิ่งสร้าง
-            return CreatedAtAction(nameof(GetFacility), new { id = newFacility.FacilityId }, newFacility);
+            var response = new Response<Facility>
+            {
+                Status = 201,
+                Message = "Facility created successfully.",
+                Data = newFacility
+            };
+            return CreatedAtAction(nameof(GetFacility), new { id = newFacility.FacilityId }, response);
         }
 
         // PUT: api/Facilities/5
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateFacility(int id, [FromBody] Facility facility)
+        public async Task<ActionResult<Response<Facility>>> UpdateFacility(int id, [FromBody] Facility facility)
         {
             if (id != facility.FacilityId)
             {
-                return BadRequest("ID in URL does not match ID in body.");
+                return BadRequest(new Response<object> { Status = 400, Message = "ID in URL does not match ID in body." });
             }
 
             var updatedFacility = await _facilityService.UpdateAsync(facility);
 
             if (updatedFacility == null)
             {
-                return NotFound();
+                return NotFound(new Response<object> { Status = 404, Message = "Facility not found to update." });
             }
 
-            return NoContent(); // คืนค่า 204 No Content หมายถึงอัปเดตสำเร็จ
+            return Ok(new Response<Facility> { Status = 200, Message = "Facility updated successfully.", Data = updatedFacility });
         }
 
         // DELETE: api/Facilities/5
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteFacility(int id)
+        public async Task<ActionResult<Response<object>>> DeleteFacility(int id)
         {
             var success = await _facilityService.DeleteAsync(id);
 
             if (!success)
             {
-                return NotFound();
+                return NotFound(new Response<object> { Status = 404, Message = "Facility not found to delete." });
             }
 
-            return NoContent(); // คืนค่า 204 No Content หมายถึงลบสำเร็จ
+            return Ok(new Response<object> { Status = 200, Message = "Facility deleted successfully." });
         }
     }
 }

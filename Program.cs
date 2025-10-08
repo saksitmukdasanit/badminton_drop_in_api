@@ -12,6 +12,20 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.UseUrls("http://localhost:5185");
 
+var MyAllowSpecificOrigins = "_myAllowSpecificOrigins";
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(name: MyAllowSpecificOrigins,
+                      policy =>
+                      {
+                          // สำหรับ Production ควรระบุ Domain ของ Frontend โดยตรง
+                          // เช่น .WithOrigins("http://example.com", "https://www.example.com")
+                          policy.AllowAnyOrigin() 
+                                .AllowAnyHeader()
+                                .AllowAnyMethod();
+                      });
+});
+
 // ดึง Connection String จาก appsettings.json
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
