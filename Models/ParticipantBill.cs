@@ -15,7 +15,7 @@ public partial class ParticipantBill
 
     public decimal TotalAmount { get; set; }
 
-    public byte Status { get; set; }
+    public short Status { get; set; }
 
     public DateTime CreatedDate { get; set; }
 

@@ -23,11 +23,13 @@ public partial class OrganizerProfile
 
     public string? LineId { get; set; }
 
-    public byte PhoneVisibility { get; set; }
+    public short PhoneVisibility { get; set; }
 
-    public byte FacebookVisibility { get; set; }
+    public short FacebookVisibility { get; set; }
 
-    public byte LineVisibility { get; set; }
+    public short LineVisibility { get; set; }
+
+    public short Status { get; set; }
 
     public DateTime CreatedDate { get; set; }
 
@@ -36,8 +38,6 @@ public partial class OrganizerProfile
     public DateTime? UpdatedDate { get; set; }
 
     public int? UpdatedBy { get; set; }
-
-    public bool IsActive { get; set; }
 
     public virtual Bank Bank { get; set; } = null!;
 

@@ -4,7 +4,6 @@ namespace DropInBadAPI.Dtos
     public record RefreshTokenDto(string AccessToken, string RefreshToken);
     // ข้อมูลที่รับเข้ามาตอนสมัครสมาชิก
     public record InitiateRegisterDto(string PhoneNumber, string Username, string Password);
-    public record VerifyOtpDto(string PhoneNumber, string OtpCode);
     public record CompleteProfileDto(
         string Nickname,
         string FirstName,
@@ -23,14 +22,13 @@ namespace DropInBadAPI.Dtos
     public record SimpleLoginSuccessDto(int UserId, string Nickname, string Message);
 
     // ข้อมูลโปรไฟล์ที่จะส่งกลับไป (เพื่อไม่เปิดเผยข้อมูลที่ไม่จำเป็น)
-    public record UserProfileDto(int UserId, string? Nickname, string? ProfilePhotoUrl, string? Email);
-    public record ChangePasswordDto(string OldPassword, string NewPassword);
+    public record UserProfileDto(int UserId, string? ProfilePhotoUrl, string? PrimaryContactEmail, string? Nickname, string? FirstName, string? LastName, string? Gender, string? PhoneNumber, bool IsPhoneNumberVerified, string? EmergencyContactName, string? EmergencyContactPhone,bool? IsOrganizer);
 
-    public record RequestOtpDto(string PhoneNumber);
+    public record ChangePasswordDto(string OldPassword, string NewPassword);
 
     // DTO สำหรับคืนค่า Token พิเศษ (สำหรับ Reset Password)
     public record ResetTokenResponseDto(string ResetToken);
 
     // DTO สำหรับตั้งรหัสผ่านใหม่
-    public record ResetPasswordDto(string NewPassword);
+    public record ResetPasswordDto(string PhoneNumber, string NewPassword);
 }

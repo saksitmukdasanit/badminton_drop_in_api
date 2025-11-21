@@ -9,7 +9,7 @@ public partial class Facility
 
     public string FacilityName { get; set; } = null!;
 
-    public string? IconName { get; set; }
+    public string? IconUrl { get; set; }
 
     public bool? IsActive { get; set; }
 

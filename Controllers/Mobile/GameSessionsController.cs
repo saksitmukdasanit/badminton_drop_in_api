@@ -1,11 +1,11 @@
 using DropInBadAPI.Dtos;
-using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
+using DropInBadAPI.Service.Mobile.Game;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
-namespace DropInBadAPI.Controllers
+namespace DropInBadAPI.Controllers.Mobile
 {
     [ApiController]
     [Route("api/[controller]")]
@@ -21,8 +21,12 @@ namespace DropInBadAPI.Controllers
         [AllowAnonymous]
         public async Task<ActionResult<Response<IEnumerable<GameSessionSummaryDto>>>> GetUpcomingSessions()
         {
-            var sessions = await _sessionService.GetUpcomingSessionsAsync();
-            var response = new Response<IEnumerable<GameSessionSummaryDto>>
+            var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) != null
+             ? int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
+             : (int?)null;
+
+            var sessions = await _sessionService.GetUpcomingSessionsAsync(currentUserId);
+            var response = new Response<IEnumerable<UpcomingSessionCardDto>>
             {
                 Status = 200,
                 Message = "Upcoming sessions retrieved successfully.",
@@ -35,7 +39,7 @@ namespace DropInBadAPI.Controllers
         [HttpGet("my-history")]
         public async Task<ActionResult<Response<IEnumerable<GameSessionSummaryDto>>>> GetMyHistory()
         {
-            var sessions = await _sessionService.GetMyCreatedSessionsAsync(GetCurrentUserId());
+            var sessions = await _sessionService.GetMyPastSessionsAsync(GetCurrentUserId());
             var response = new Response<IEnumerable<GameSessionSummaryDto>>
             {
                 Status = 200,
@@ -48,15 +52,15 @@ namespace DropInBadAPI.Controllers
         // GET: api/GameSessions/5
         [HttpGet("{id}")]
         [AllowAnonymous]
-        public async Task<ActionResult<Response<ManageGameSessionDto>>> GetSession(int id)
+        public async Task<ActionResult<Response<EditGameSessionDto>>> GetSession(int id)
         {
-            var session = await _sessionService.GetSessionByIdAsync(id);
+            var session = await _sessionService.GetSessionForEditAsync(id);
             if (session == null)
             {
                 return NotFound(new Response<object> { Status = 404, Message = "Session not found." });
             }
-            
-            return Ok(new Response<ManageGameSessionDto> { Status = 200, Message = "Session retrieved successfully.", Data = session });
+
+            return Ok(new Response<EditGameSessionDto> { Status = 200, Message = "Session retrieved successfully.", Data = session });
         }
 
         // POST: api/GameSessions
@@ -103,7 +107,7 @@ namespace DropInBadAPI.Controllers
             {
                 return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or you do not have permission to update it." });
             }
-            
+
             return Ok(new Response<ManageGameSessionDto> { Status = 200, Message = "Session updated successfully.", Data = updatedSession });
         }
 
@@ -116,8 +120,102 @@ namespace DropInBadAPI.Controllers
             {
                 return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or you do not have permission to cancel it." });
             }
-            
+
             return Ok(new Response<object> { Status = 200, Message = "Session has been cancelled." });
+        }
+
+        [HttpPut("{id}/cancel-by-organizer")]
+        public async Task<ActionResult<Response<object>>> CancelSessionByOrganizer(int id)
+        {
+            var success = await _sessionService.CancelSessionByOrganizerAsync(id, GetCurrentUserId());
+
+            if (!success)
+            {
+                return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or you do not have permission to cancel it." });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Session has been cancelled by the organizer." });
+        }
+
+
+        [HttpPost("{id}/join")]
+        public async Task<ActionResult<Response<JoinSessionResponseDto>>> JoinSession(int id)
+        {
+            var (data, errorMessage) = await _sessionService.JoinSessionAsync(id, GetCurrentUserId());
+
+            if (data == null)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<JoinSessionResponseDto> { Status = 200, Message = data.StatusMessage, Data = data });
+        }
+
+        // DELETE: api/GameSessions/5/cancel
+        [HttpDelete("{id}/cancel")]
+        public async Task<ActionResult<Response<object>>> CancelBooking(int id)
+        {
+            var (success, errorMessage) = await _sessionService.CancelBookingAsync(id, GetCurrentUserId());
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Your booking has been cancelled." });
+        }
+
+        [HttpPost("{id}/add-guest")]
+        public async Task<ActionResult<Response<ParticipantDto>>> AddGuestToSession(int id, [FromBody] AddGuestDto dto)
+        {
+            var (data, errorMessage) = await _sessionService.AddGuestAsync(id, GetCurrentUserId(), dto);
+
+            if (data == null)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<ParticipantDto> { Status = 200, Message = "Guest added successfully.", Data = data });
+        }
+
+        [HttpPut("{sessionId}/participants/{participantType}/{participantId}/skill-level")]
+        public async Task<ActionResult<Response<object>>> UpdateParticipantSkillLevel(int sessionId, string participantType, int participantId, [FromBody] UpdateSkillLevelDto dto)
+        {
+            var (success, errorMessage) = await _sessionService.UpdateParticipantSkillLevelAsync(sessionId, participantType, participantId, dto.SkillLevelId, GetCurrentUserId());
+
+            if (!success)
+            {
+                // สามารถใช้ NotFound หรือ BadRequest ได้ตามความเหมาะสมของ Error Message
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Skill level updated successfully." });
+        }
+
+
+        [HttpGet("my-upcoming")]
+        public async Task<ActionResult<Response<IEnumerable<UpcomingSessionCardDto>>>> GetMyUpcoming()
+        {
+            var sessions = await _sessionService.GetMyUpcomingSessionsAsync(GetCurrentUserId());
+            return Ok(new Response<IEnumerable<UpcomingSessionCardDto>>
+            {
+                Status = 200,
+                Message = "Organizer's upcoming sessions retrieved.",
+                Data = sessions
+            });
+        }
+
+        [HttpPost("{id}/start")]
+        public async Task<ActionResult<Response<object>>> StartSession(int id)
+        {
+            var (success, errorMessage) = await _sessionService.StartSessionAsync(id, GetCurrentUserId());
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Session successfully started." });
         }
     }
 }

@@ -15,7 +15,7 @@ public partial class MatchPlayer
 
     public string Team { get; set; } = null!;
 
-    public byte? Result { get; set; }
+    public short? Result { get; set; }
 
     public string? Notes { get; set; }
 

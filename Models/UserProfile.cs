@@ -17,7 +17,7 @@ public partial class UserProfile
 
     public string? LastName { get; set; }
 
-    public byte? Gender { get; set; }
+    public short? Gender { get; set; }
 
     public string? PhoneNumber { get; set; }
 

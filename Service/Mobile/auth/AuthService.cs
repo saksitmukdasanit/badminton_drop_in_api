@@ -18,64 +18,33 @@ namespace DropInBadAPI.Repositories
             _jwtService = jwtService;
         }
 
-        public async Task<(bool Success, string ErrorMessage)> InitiateRegistrationAsync(InitiateRegisterDto dto)
+        public async Task<(string? AccessToken, string? RefreshToken, string ErrorMessage)> RegisterAsync(InitiateRegisterDto dto)
         {
-            // ตรวจสอบ Username/Phone number ซ้ำ
             if (await _context.UserLogins.AnyAsync(ul => ul.ProviderKey == dto.Username && ul.ProviderName == "Local"))
-                return (false, "Username already exists.");
+                return (null, null, "Username already exists.");
             if (await _context.UserProfiles.AnyAsync(up => up.PhoneNumber == dto.PhoneNumber))
-                return (false, "Phone number already exists.");
+                return (null, null, "Phone number already exists.");
 
-            var passwordHash = "hashed_" + dto.Password; // Placeholder for actual hashing
+            var passwordHash = "hashed_" + dto.Password; // Placeholder
 
-            // สร้าง User แต่ยังไม่ Active เต็มตัว
-            var newUser = new User { IsActive = false }; // ยังไม่ Active จนกว่าจะยืนยัน OTP
+            var newUser = new User { IsActive = true }; // Active ได้เลย
             _context.Users.Add(newUser);
             await _context.SaveChangesAsync();
 
-            _context.UserLogins.Add(new UserLogin { ProviderName = "Local", ProviderKey = dto.Username, PasswordHash = passwordHash, UserId = newUser.UserId });
+            _context.UserProfiles.Add(new UserProfile { UserId = newUser.UserId, PhoneNumber = dto.PhoneNumber, IsPhoneNumberVerified = true }); // Verified ได้เลย
 
-            // สร้าง OTP (ในระบบจริงควรสุ่มตัวเลข 4-6 หลัก)
-            var otpCode = "123456"; // Placeholder
-            var otpExpiry = DateTime.UtcNow.AddMinutes(5); // OTP มีอายุ 5 นาที
+            var userLogin = new UserLogin { ProviderName = "Local", ProviderKey = dto.Username, PasswordHash = passwordHash, UserId = newUser.UserId };
 
-            _context.UserProfiles.Add(new UserProfile { UserId = newUser.UserId, PhoneNumber = dto.PhoneNumber, Otpcode = otpCode, OtpexpiryDate = otpExpiry, IsPhoneNumberVerified = false });
-
-            await _context.SaveChangesAsync();
-
-            // TODO: ณ จุดนี้ ให้เรียก Service ภายนอกเพื่อส่ง SMS OTP ไปที่ dto.PhoneNumber
-            // Console.WriteLine($"Sending OTP {otpCode} to {dto.PhoneNumber}");
-
-            return (true, string.Empty);
-        }
-
-        public async Task<(string? AccessToken, string? RefreshToken, string ErrorMessage)> VerifyOtpAndLoginAsync(VerifyOtpDto dto)
-        {
-            var userProfile = await _context.UserProfiles
-                .Include(up => up.User) // ดึงข้อมูล User ที่เชื่อมกันมาด้วย
-                .FirstOrDefaultAsync(up => up.PhoneNumber == dto.PhoneNumber);
-
-            if (userProfile == null || userProfile.Otpcode != dto.OtpCode || userProfile.OtpexpiryDate < DateTime.UtcNow)
-            {
-                return (null, null, "Invalid or expired OTP.");
-            }
-
-            // ยืนยันสำเร็จ
-            userProfile.IsPhoneNumberVerified = true;
-            userProfile.User!.IsActive = true; // เปิดใช้งาน User
-            userProfile.Otpcode = null; // ล้าง OTP เพื่อความปลอดภัย
-            userProfile.OtpexpiryDate = null;
-
-            // สร้าง Token ทั้ง 2 ตัว
-            var accessToken = _jwtService.CreateAccessToken(userProfile.User);
+            // สร้างและบันทึก Refresh Token
             var refreshToken = _jwtService.CreateRefreshToken();
-
-            // บันทึก Refresh Token
-            var userLogin = await _context.UserLogins.FirstAsync(ul => ul.UserId == userProfile.UserId && ul.ProviderName == "Local");
             userLogin.RefreshToken = refreshToken;
-            userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(90);
+            _context.UserLogins.Add(userLogin);
 
             await _context.SaveChangesAsync();
+
+            // สร้าง Access Token แล้วส่งกลับไป
+            var accessToken = _jwtService.CreateAccessToken(newUser);
 
             return (accessToken, refreshToken, string.Empty);
         }
@@ -121,7 +90,7 @@ namespace DropInBadAPI.Repositories
 
             // บันทึก Refresh Token ลงฐานข้อมูล
             userLogin.RefreshToken = refreshToken;
-            userLogin.RefreshTokenExpiryTime = DateTime.Now.AddDays(7); // ตั้งวันหมดอายุ
+            userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(90); // ตั้งวันหมดอายุ
             await _context.SaveChangesAsync();
 
             return (accessToken, refreshToken);
@@ -131,8 +100,23 @@ namespace DropInBadAPI.Repositories
             // ดึงข้อมูลจาก UserProfiles และแปลงเป็น DTO เพื่อส่งกลับ
             var profile = await _context.UserProfiles
                 .Where(p => p.UserId == userId)
-                .Select(p => new UserProfileDto(p.UserId, p.Nickname, p.ProfilePhotoUrl, p.PrimaryContactEmail))
-                .FirstOrDefaultAsync();
+                .Include(p => p.User.OrganizerProfile) 
+                .Select(p => new UserProfileDto(
+                    p.UserId,
+                    p.ProfilePhotoUrl,
+                    p.PrimaryContactEmail,
+                    p.Nickname,
+                    p.FirstName,
+                    p.LastName,
+                    p.Gender == 1 ? "ชาย" :
+                    p.Gender == 2 ? "หญิง" :
+                    p.Gender == 3 ? "อื่นๆ" : null,
+                    p.PhoneNumber,
+                    p.IsPhoneNumberVerified,
+                    p.EmergencyContactName,
+                    p.EmergencyContactPhone,
+                    p.User.OrganizerProfile == null ? null : p.User.OrganizerProfile != null && p.User.OrganizerProfile.Status == 1
+                    )).FirstOrDefaultAsync();
 
             return profile;
         }
@@ -150,7 +134,7 @@ namespace DropInBadAPI.Repositories
             {
                 return (null, null); // Refresh Token ไม่ถูกต้อง หรือหมดอายุ
             }
-            if (userLogin == null || userLogin.RefreshToken != refreshToken || userLogin.RefreshTokenExpiryTime <= DateTime.Now)
+            if (userLogin == null || userLogin.RefreshToken != refreshToken || userLogin.RefreshTokenExpiryTime <= DateTime.UtcNow)
             {
                 return (null, null); // Refresh Token ไม่ถูกต้อง หรือหมดอายุ
             }
@@ -195,72 +179,29 @@ namespace DropInBadAPI.Repositories
             return (true, "Password changed successfully.");
         }
 
-        public async Task<bool> RequestPasswordResetOtpAsync(RequestOtpDto dto)
+        public async Task<(bool Success, string ErrorMessage)> ResetPasswordAsync(ResetPasswordDto dto)
         {
-            var userProfile = await _context.UserProfiles.FirstOrDefaultAsync(up => up.PhoneNumber == dto.PhoneNumber);
+            // ค้นหา User จากเบอร์โทรแทน UserID
+            var userProfile = await _context.UserProfiles.FirstOrDefaultAsync(p => p.PhoneNumber == dto.PhoneNumber);
             if (userProfile == null)
             {
-                // ไม่เจอเบอร์โทรนี้ในระบบ แต่เราจะไม่แจ้ง Error กลับไปเพื่อความปลอดภัย
-                // (ป้องกันการสุ่มหาเบอร์โทรในระบบ)
-                return true;
+                return (false, "User with this phone number not found.");
             }
 
-            // สร้าง OTP และวันหมดอายุ
-            var otpCode = new Random().Next(100000, 999999).ToString(); // สุ่มเลข 6 หลัก
-            var otpExpiry = DateTime.UtcNow.AddMinutes(5);
-
-            userProfile.Otpcode = otpCode;
-            userProfile.OtpexpiryDate = otpExpiry;
-            await _context.SaveChangesAsync();
-
-            // TODO: ณ จุดนี้ ให้เรียก Service ภายนอกเพื่อส่ง SMS OTP ไปที่ dto.PhoneNumber
-            Console.WriteLine($"Sending Password Reset OTP {otpCode} to {dto.PhoneNumber}");
-
-            return true;
-        }
-
-        public async Task<(string? ResetToken, string ErrorMessage)> VerifyPasswordResetOtpAsync(VerifyOtpDto dto)
-        {
-            var userProfile = await _context.UserProfiles
-                .Include(up => up.User)
-                .FirstOrDefaultAsync(up => up.PhoneNumber == dto.PhoneNumber);
-
-            if (userProfile == null || userProfile.Otpcode != dto.OtpCode || userProfile.OtpexpiryDate < DateTime.UtcNow)
-            {
-                return (null, "Invalid or expired OTP.");
-            }
-
-            // OTP ถูกต้อง ให้ล้างค่า OTP ใน DB
-            userProfile.Otpcode = null;
-            userProfile.OtpexpiryDate = null;
-            await _context.SaveChangesAsync();
-
-            // สร้าง Token พิเศษอายุสั้นๆ (เช่น 10 นาที) สำหรับใช้ในการตั้งรหัสผ่านใหม่
-            var resetToken = _jwtService.CreateAccessToken(userProfile.User!);
-
-            return (resetToken, string.Empty);
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> ResetPasswordAsync(int userId, ResetPasswordDto dto)
-        {
             var userLogin = await _context.UserLogins
-                .FirstOrDefaultAsync(ul => ul.UserId == userId && ul.ProviderName == "Local");
+                .FirstOrDefaultAsync(ul => ul.UserId == userProfile.UserId && ul.ProviderName == "Local");
 
             if (userLogin == null)
             {
                 return (false, "User not found.");
             }
 
-            // Hash รหัสผ่านใหม่แล้วบันทึก
-            var newPasswordHash = "hashed_" + dto.NewPassword; // Placeholder for actual hashing
+            var newPasswordHash = "hashed_" + dto.NewPassword; // Placeholder
             userLogin.PasswordHash = newPasswordHash;
-
-            // เพื่อความปลอดภัย: ล้าง Refresh Token เก่าทิ้ง เพื่อบังคับให้ทุกเครื่อง Login ใหม่
             userLogin.RefreshToken = null;
             userLogin.RefreshTokenExpiryTime = null;
 
             await _context.SaveChangesAsync();
-
             return (true, "Password has been reset successfully.");
         }
     }

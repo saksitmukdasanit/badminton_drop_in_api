@@ -1,11 +1,11 @@
 using DropInBadAPI.Dtos;
-using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
+using DropInBadAPI.Service.Mobile.Organizer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
-namespace DropInBadAPI.Controllers
+namespace DropInBadAPI.Controllers.Mobile
 {
     [ApiController]
     [Route("api/organizer/skill-levels")]
@@ -30,9 +30,9 @@ namespace DropInBadAPI.Controllers
         }
 
         [HttpPost]
-        public async Task<ActionResult<Response<IEnumerable<SkillLevelDto>>>> SaveMySkillLevels([FromBody] IEnumerable<CreateSkillLevelDto> dtos)
+        public async Task<ActionResult<Response<IEnumerable<SkillLevelDto>>>> SaveMySkillLevels([FromBody] IEnumerable<SaveSkillLevelDto> dtos)
         {
-            if (dtos == null || !dtos.Any())
+            if (dtos == null)
             {
                 return BadRequest(new Response<object> { Status = 400, Message = "Skill level data is required." });
             }

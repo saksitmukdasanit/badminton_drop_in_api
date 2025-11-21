@@ -11,7 +11,7 @@ public partial class SessionWalkinGuest
 
     public string GuestName { get; set; } = null!;
 
-    public byte? Gender { get; set; }
+    public short? Gender { get; set; }
 
     public int? SkillLevelId { get; set; }
 
@@ -19,15 +19,15 @@ public partial class SessionWalkinGuest
 
     public DateTime? PaymentDate { get; set; }
 
-    public DateTime? CheckinTime { get; set; }
-
-    public DateTime? CheckoutTime { get; set; }
-
-    public byte? Status { get; set; }
+    public short? Status { get; set; }
 
     public DateTime CreatedDate { get; set; }
 
     public int? CreatedBy { get; set; }
+
+    public DateTime? CheckinTime { get; set; }
+
+    public DateTime? CheckoutTime { get; set; }
 
     public virtual ICollection<MatchPlayer> MatchPlayers { get; set; } = new List<MatchPlayer>();
 

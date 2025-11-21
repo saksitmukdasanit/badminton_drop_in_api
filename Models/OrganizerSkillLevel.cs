@@ -9,7 +9,7 @@ public partial class OrganizerSkillLevel
 
     public int OrganizerUserId { get; set; }
 
-    public byte LevelRank { get; set; }
+    public short LevelRank { get; set; }
 
     public string LevelName { get; set; } = null!;
 

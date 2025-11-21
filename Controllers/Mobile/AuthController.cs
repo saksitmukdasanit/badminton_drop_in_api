@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
-namespace DropInBadAPI.Controllers
+namespace DropInBadAPI.Controllers.Mobile
 {
     [ApiController]
     [Route("api/[controller]")]
@@ -21,30 +21,16 @@ namespace DropInBadAPI.Controllers
         [HttpPost("register")]
         public async Task<ActionResult<Response<object>>> InitiateRegistration([FromBody] InitiateRegisterDto dto)
         {
-            var (success, errorMessage) = await _authService.InitiateRegistrationAsync(dto);
-
-            if (!success)
-            {
-                // ส่ง Response กลางกลับไปในกรณีที่ Error
-                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
-            }
-
-            // ส่ง Response กลางกลับไปในกรณีที่สำเร็จ
-            return Ok(new Response<object> { Status = 200, Message = "Registration initiated. Please verify OTP." });
-        }
-
-        [HttpPost("verify-otp")]
-        public async Task<ActionResult<Response<LoginResponseDto>>> VerifyOtp([FromBody] VerifyOtpDto dto)
-        {
-            var (accessToken, refreshToken, errorMessage) = await _authService.VerifyOtpAndLoginAsync(dto);
+            var (accessToken, refreshToken, errorMessage) = await _authService.RegisterAsync(dto);
             if (string.IsNullOrEmpty(accessToken))
             {
                 return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             }
 
             var data = new LoginResponseDto(accessToken, refreshToken!);
-            return Ok(new Response<LoginResponseDto> { Status = 200, Message = "OTP verified successfully.", Data = data });
+            return Ok(new Response<LoginResponseDto> { Status = 201, Message = "User registered and logged in successfully.", Data = data });
         }
+
 
         [HttpPut("complete-profile")]
         [Authorize]
@@ -69,7 +55,7 @@ namespace DropInBadAPI.Controllers
             {
                 return Unauthorized(new Response<object> { Status = 401, Message = "Invalid username or password." });
             }
-            
+
             var data = new LoginResponseDto(accessToken, refreshToken);
             return Ok(new Response<LoginResponseDto> { Status = 200, Message = "Login successful.", Data = data });
         }
@@ -129,34 +115,11 @@ namespace DropInBadAPI.Controllers
             return Ok(new Response<UserProfileDto> { Status = 200, Message = "Profile retrieved successfully.", Data = userProfile });
         }
 
-        [HttpPost("forgot-password/request-otp")]
-        [AllowAnonymous]
-        public async Task<IActionResult> RequestPasswordReset([FromBody] RequestOtpDto dto)
-        {
-            await _authService.RequestPasswordResetOtpAsync(dto);
-            return Ok(new Response<object> { Status = 200, Message = "If a matching account was found, an OTP has been sent." });
-        }
-
-        [HttpPost("forgot-password/verify-otp")]
-        [AllowAnonymous]
-        public async Task<ActionResult<Response<ResetTokenResponseDto>>> VerifyPasswordResetOtp([FromBody] VerifyOtpDto dto)
-        {
-            var (resetToken, errorMessage) = await _authService.VerifyPasswordResetOtpAsync(dto);
-            if (string.IsNullOrEmpty(resetToken))
-            {
-                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
-            }
-            
-            var data = new ResetTokenResponseDto(resetToken);
-            return Ok(new Response<ResetTokenResponseDto> { Status = 200, Message = "OTP verified. Please use the reset token to set a new password.", Data = data });
-        }
-
         [HttpPost("forgot-password/reset")]
-        [Authorize]
+        [AllowAnonymous]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
         {
-            var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            var (success, errorMessage) = await _authService.ResetPasswordAsync(int.Parse(userIdString!), dto);
+            var (success, errorMessage) = await _authService.ResetPasswordAsync(dto);
 
             if (!success)
             {

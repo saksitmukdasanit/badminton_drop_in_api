@@ -9,7 +9,7 @@ public partial class Payment
 
     public int BillId { get; set; }
 
-    public byte PaymentMethod { get; set; }
+    public short PaymentMethod { get; set; }
 
     public decimal Amount { get; set; }
 

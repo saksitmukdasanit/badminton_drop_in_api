@@ -1,11 +1,11 @@
 using DropInBadAPI.Dtos;
-using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
+using DropInBadAPI.Service.Mobile.Organizer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
-namespace DropInBadAPI.Controllers
+namespace DropInBadAPI.Controllers.Mobile
 {
     [ApiController]
     [Route("api/[controller]")]
@@ -28,17 +28,18 @@ namespace DropInBadAPI.Controllers
         public async Task<ActionResult<Response<OrganizerProfile>>> RegisterAsOrganizer([FromBody] OrganizerProfileDto dto)
         {
             var userId = GetCurrentUserId();
+            var (newProfile, errorMessage) = await _organizerService.RegisterAsync(userId, dto);
 
-            if (await _organizerService.IsUserAlreadyOrganizerAsync(userId))
+            if (errorMessage != null)
             {
-                return BadRequest(new Response<object> { Status = 400, Message = "This user is already registered as an organizer." });
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             }
 
-            var newProfile = await _organizerService.RegisterAsync(userId, dto);
+            // ถ้าสำเร็จ
             var response = new Response<OrganizerProfile>
             {
                 Status = 201,
-                Message = "Organizer profile created successfully.",
+                Message = "Organizer profile created successfully. Awaiting approval.",
                 Data = newProfile
             };
             return CreatedAtAction(nameof(GetOrganizerProfile), new { }, response);
@@ -54,8 +55,8 @@ namespace DropInBadAPI.Controllers
             {
                 return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
             }
-            
-            return Ok(new Response<OrganizerProfile> { Status = 200, Message = "Organizer profile retrieved successfully.", Data = profile });
+
+            return Ok(new Response<FullOrganizerProfileDto> { Status = 200, Message = "Organizer profile retrieved successfully.", Data = profile });
         }
 
         [HttpPut("profile")]
@@ -70,6 +71,34 @@ namespace DropInBadAPI.Controllers
             }
 
             return Ok(new Response<OrganizerProfile> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
+        }
+
+        [HttpPut("profileUserAndOrganizer")]
+        public async Task<ActionResult<Response<bool>>> UpdateProfileAndOrganizer([FromBody] ProfileAndOrganizerDto dto)
+        {
+            var userId = GetCurrentUserId();
+            var updatedProfile = await _organizerService.UpdateProfileAndOrganizerAsync(userId, dto);
+
+            if (!updatedProfile)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
+            }
+
+            return Ok(new Response<bool> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
+        }
+
+         [HttpPut("updateTransferBooking")]
+        public async Task<ActionResult<Response<OrganizerProfile?>>> updateTransferBooking([FromBody] TransferBookingDto dto)
+        {
+            var userId = GetCurrentUserId();
+            var updatedProfile = await _organizerService.UpdateTransferBookingAsync(userId, dto);
+
+            if (updatedProfile == null)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
+            }
+
+            return Ok(new Response<OrganizerProfile?> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
         }
     }
 }

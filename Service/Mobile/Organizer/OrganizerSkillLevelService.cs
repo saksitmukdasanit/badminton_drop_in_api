@@ -4,7 +4,7 @@ using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace DropInBadAPI.Services
+namespace DropInBadAPI.Service.Mobile.Organizer
 {
     public class OrganizerSkillLevelService : IOrganizerSkillLevelService
     {
@@ -27,37 +27,61 @@ namespace DropInBadAPI.Services
                 .Select(sl => new SkillLevelDto(sl.SkillLevelId, sl.LevelRank, sl.LevelName, sl.ColorHexCode))
                 .FirstOrDefaultAsync();
         }
-        public async Task<IEnumerable<SkillLevelDto>> SaveLevelsAsync(int organizerUserId, IEnumerable<CreateSkillLevelDto> dtos)
+        public async Task<IEnumerable<SkillLevelDto>> SaveLevelsAsync(int organizerUserId, IEnumerable<SaveSkillLevelDto> dtos)
         {
-            // 1. ค้นหาระดับมือเก่าทั้งหมดของผู้ใช้นี้
-            var existingLevels = await _context.OrganizerSkillLevels
+           var existingLevels = await _context.OrganizerSkillLevels
                 .Where(sl => sl.OrganizerUserId == organizerUserId)
                 .ToListAsync();
 
-            // 2. ลบของเก่าทิ้งทั้งหมด
-            if (existingLevels.Any())
+            // 2. แยก ID ของข้อมูลชุดใหม่ที่ส่งเข้ามา (เฉพาะอันที่มี ID)
+            var incomingLevelIds = dtos
+                .Where(d => d.SkillLevelId.HasValue)
+                .Select(d => d.SkillLevelId!.Value)
+                .ToHashSet(); // ToHashSet() เพื่อการค้นหาที่เร็วขึ้น
+
+            // 3. จัดการรายการที่ต้อง "ลบ" (Soft Delete)
+            // คือรายการที่เคยมีใน DB แต่ไม่ได้ถูกส่งมาในข้อมูลชุดใหม่
+            var levelsToDelete = existingLevels.Where(l => !incomingLevelIds.Contains(l.SkillLevelId));
+            foreach (var level in levelsToDelete)
             {
-                _context.OrganizerSkillLevels.RemoveRange(existingLevels);
+                level.IsActive = false;
             }
 
-            // 3. เตรียมข้อมูลใหม่ทั้งหมดจาก DTO ที่ส่งมา
-            var newLevels = dtos.Select(dto => new OrganizerSkillLevel
+            // 4. จัดการรายการที่ต้อง "เพิ่ม" หรือ "แก้ไข"
+            foreach (var dto in dtos)
             {
-                OrganizerUserId = organizerUserId,
-                LevelRank = dto.LevelRank,
-                LevelName = dto.LevelName,
-                ColorHexCode = dto.ColorHexCode
-            }).ToList();
+                if (dto.SkillLevelId.HasValue) // ถ้ามี ID มาด้วย = แก้ไข (Update)
+                {
+                    var levelToUpdate = existingLevels.FirstOrDefault(l => l.SkillLevelId == dto.SkillLevelId.Value);
+                    if (levelToUpdate != null)
+                    {
+                        levelToUpdate.LevelRank = dto.LevelRank;
+                        levelToUpdate.LevelName = dto.LevelName;
+                        levelToUpdate.ColorHexCode = dto.ColorHexCode;
+                        levelToUpdate.IsActive = true; // เผื่อเป็นการเปิดใช้งานรายการที่เคยลบไปแล้ว
+                        levelToUpdate.UpdatedDate = DateTime.UtcNow;
+                    }
+                }
+                else // ถ้าไม่มี ID = สร้างใหม่ (Add)
+                {
+                    var newLevel = new OrganizerSkillLevel
+                    {
+                        OrganizerUserId = organizerUserId,
+                        LevelRank = dto.LevelRank,
+                        LevelName = dto.LevelName,
+                        ColorHexCode = dto.ColorHexCode,
+                        IsActive = true,
+                        CreatedDate = DateTime.UtcNow
+                    };
+                    await _context.OrganizerSkillLevels.AddAsync(newLevel);
+                }
+            }
 
-            // 4. เพิ่มข้อมูลใหม่ทั้งหมดลง Context ในครั้งเดียว (ประสิทธิภาพดีกว่า Add ทีละอัน)
-            await _context.OrganizerSkillLevels.AddRangeAsync(newLevels);
-
-            // 5. บันทึกการเปลี่ยนแปลงทั้งหมดลงฐานข้อมูลใน Transaction เดียว
+            // 5. บันทึกการเปลี่ยนแปลงทั้งหมดลง DB ในครั้งเดียว
             await _context.SaveChangesAsync();
 
-            // 6. แปลงผลลัพธ์กลับไปเป็น DTO เพื่อส่งคืน
-            return newLevels.Select(l => new SkillLevelDto(l.SkillLevelId, l.LevelRank, l.LevelName, l.ColorHexCode));
+            // 6. ดึงข้อมูลล่าสุดทั้งหมดที่ Active อยู่ ส่งกลับไป
+            return await GetLevelsByOrganizerAsync(organizerUserId);
         }
-
     }
 }

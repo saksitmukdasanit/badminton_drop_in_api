@@ -11,7 +11,7 @@ public partial class GameSessionPhoto
 
     public string PhotoUrl { get; set; } = null!;
 
-    public byte? DisplayOrder { get; set; }
+    public short? DisplayOrder { get; set; }
 
     public string? Caption { get; set; }
 

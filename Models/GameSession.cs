@@ -25,7 +25,7 @@ public partial class GameSession
 
     public int MaxParticipants { get; set; }
 
-    public byte? CostingMethod { get; set; }
+    public short? CostingMethod { get; set; }
 
     public decimal? CourtFeePerPerson { get; set; }
 
@@ -43,7 +43,7 @@ public partial class GameSession
 
     public string? Notes { get; set; }
 
-    public byte? Status { get; set; }
+    public short? Status { get; set; }
 
     public int CreatedByUserId { get; set; }
 

@@ -15,6 +15,10 @@ public partial class UserLogin
 
     public string? ProviderEmail { get; set; }
 
+    public string? RefreshToken { get; set; }
+
+    public DateTime? RefreshTokenExpiryTime { get; set; }
+
     public DateTime CreatedDate { get; set; }
 
     public int? CreatedBy { get; set; }
@@ -22,10 +26,6 @@ public partial class UserLogin
     public DateTime? UpdatedDate { get; set; }
 
     public int? UpdatedBy { get; set; }
-
-    public string? RefreshToken { get; set; }
-
-    public DateTime? RefreshTokenExpiryTime { get; set; }
 
     public virtual User User { get; set; } = null!;
 }
