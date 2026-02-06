@@ -899,27 +899,136 @@ namespace DropInBadAPI.Service.Mobile.Game
             return sessions;
         }
 
-        public async Task<IEnumerable<GameSessionSummaryDto>> GetMyPastSessionsAsync(int organizerUserId)
+        public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId)
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
 
-            return await _context.GameSessions
-               .Where(s => s.CreatedByUserId == organizerUserId && s.SessionDate < today) // << กรองเฉพาะอดีต
+            var sessions = await _context.GameSessions
+               .Where(s => s.CreatedByUserId == organizerUserId && (s.SessionDate < today || s.Status != 1)) // << กรองอดีต หรือก๊วนที่จบ/ยกเลิกแล้ว (ไม่ Active)
                .Include(s => s.Venue)
                .Include(s => s.SessionParticipants)
+               .Include(s => s.SessionWalkinGuests)
+               .Include(s => s.ParticipantBills) // ดึงบิลเพื่อคำนวณเงิน
                .OrderByDescending(s => s.SessionDate) // เรียงจากล่าสุดไปเก่าสุด
                .ThenByDescending(s => s.StartTime)
-               .Take(20) // ดึงมาแค่ 20 ก๊วนล่าสุดก็พอ
-               .Select(s => new GameSessionSummaryDto
-               {
-                   SessionId = s.SessionId,
-                   GroupName = s.GroupName,
-                   SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                   VenueName = s.Venue.VenueName,
-                   MaxParticipants = s.MaxParticipants,
-                   CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1)
-               })
                .ToListAsync();
+
+            var result = new List<OrganizerGameSessionDto>();
+
+            foreach (var s in sessions)
+            {
+                // คำนวณรายได้
+                // 1. รายได้ที่เก็บได้จริง (Paid) = ผลรวมของบิลทั้งหมด
+                decimal paidAmount = s.ParticipantBills.Sum(b => b.TotalAmount);
+
+                // 2. รายได้ที่ควรจะได้ (Expected) = จำนวนผู้เล่น * (ค่าคอร์ท + ค่าลูก)
+                // นับเฉพาะคนที่ Status = 1 (Joined)
+                int memberCount = s.SessionParticipants.Count(p => p.Status == 1);
+                int guestCount = s.SessionWalkinGuests.Count(g => g.Status == 1);
+                int totalPlayers = memberCount + guestCount;
+
+                decimal feePerPerson = (s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0);
+                decimal expectedIncome = totalPlayers * feePerPerson;
+
+                // 3. ค้างจ่าย (Unpaid)
+                // กรณีที่เก็บเงินได้น้อยกว่าที่ควรจะได้ (หรืออาจจะใช้ Logic ว่าใครยังไม่มีบิลก็ได้ แต่วิธีนี้ง่ายกว่าสำหรับภาพรวม)
+                decimal unpaidAmount = expectedIncome - paidAmount;
+                if (unpaidAmount < 0) unpaidAmount = 0; // ป้องกันติดลบกรณีเก็บเกินหรือทิป
+
+                result.Add(new OrganizerGameSessionDto
+                {
+                    GameSessionId = s.SessionId,
+                    Date = s.SessionDate.ToDateTime(s.StartTime),
+                    GroupName = s.GroupName,
+                    TotalIncome = expectedIncome, // รายได้รวมที่ควรจะได้
+                    PaidAmount = paidAmount,      // จ่ายแล้ว
+                    UnpaidAmount = unpaidAmount,  // ค้างจ่าย
+                    Status = s.Status == 3 ? "Cancelled" : (s.Status == 2 ? "Started" : "Open"),
+                    StartTime = s.StartTime.ToString("HH:mm"),
+                    EndTime = s.EndTime.ToString("HH:mm"),
+                    TotalParticipants = totalPlayers,
+                    TotalCourts = s.NumberOfCourts,
+                    VenueName = s.Venue.VenueName,
+                    Price = feePerPerson
+                });
+            }
+
+            return result;
+        }
+
+        public async Task<GameSessionAnalyticsDto?> GetSessionAnalyticsAsync(int sessionId, int organizerUserId)
+        {
+            var session = await _context.GameSessions
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+
+            if (session == null) return null;
+
+            // ดึงข้อมูลแมตช์ที่จบแล้ว (Status = 2)
+            var matches = await _context.Matches
+                .Where(m => m.SessionId == sessionId && m.Status == 2)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
+                .OrderBy(m => m.StartTime)
+                .ToListAsync();
+
+            var analytics = new GameSessionAnalyticsDto
+            {
+                GroupName = session.GroupName,
+                Date = session.SessionDate.ToDateTime(session.StartTime),
+                TotalGames = matches.Count,
+                TotalShuttlecocks = 0 // TODO: ถ้ามีฟิลด์เก็บจำนวนลูกใน Match ให้ Sum ตรงนี้
+            };
+
+            if (matches.Any())
+            {
+                var firstMatch = matches.First();
+                var lastMatch = matches.Last();
+
+                analytics.TotalPlayTimeStart = firstMatch.StartTime?.ToString("HH:mm") ?? "-";
+                analytics.TotalPlayTimeEnd = lastMatch.EndTime?.ToString("HH:mm") ?? "-";
+
+                // คำนวณระยะเวลา
+                var durations = matches
+                    .Where(m => m.StartTime.HasValue && m.EndTime.HasValue)
+                    .Select(m => new
+                    {
+                        Match = m,
+                        Duration = (m.EndTime!.Value - m.StartTime!.Value)
+                    })
+                    .ToList();
+
+                if (durations.Any())
+               {
+                    var avgSeconds = durations.Average(d => d.Duration.TotalSeconds);
+                    analytics.AveragePlayTimePerGame = TimeSpan.FromSeconds(avgSeconds).ToString(@"mm\:ss");
+
+                    var longest = durations.OrderByDescending(d => d.Duration).First();
+                    var shortest = durations.OrderBy(d => d.Duration).First();
+
+                    Func<Match, string> getPlayerNames = (m) =>
+                    {
+                        var teamA = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "A").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A"));
+                        var teamB = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "B").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A"));
+                        return $"{teamA} vs {teamB}";
+                    };
+
+                    analytics.LongestGame = new MatchPerformanceDto { Players = getPlayerNames(longest.Match), Duration = longest.Duration.ToString(@"mm\:ss") + " นาที" };
+                    analytics.ShortestGame = new MatchPerformanceDto { Players = getPlayerNames(shortest.Match), Duration = shortest.Duration.ToString(@"mm\:ss") + " นาที" };
+                }
+
+                // สร้าง Match History List
+                analytics.MatchHistory = matches.Select(m => new MatchHistoryDto
+                {
+                    MatchId = m.MatchId,
+                    CourtNumber = m.CourtNumber ?? "-",
+                    ShuttlecocksUsed = 0, // TODO: ใส่ค่าจริงถ้ามี
+                    TeamA = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "A").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A")),
+                    TeamB = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "B").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A")),
+                    Duration = (m.StartTime.HasValue && m.EndTime.HasValue) ? (m.EndTime.Value - m.StartTime.Value).ToString(@"mm\:ss") : "-"
+                }).ToList();
+            }
+
+            return analytics;
         }
 
         public async Task<(bool Success, string ErrorMessage)> StartSessionAsync(int sessionId, int organizerUserId)

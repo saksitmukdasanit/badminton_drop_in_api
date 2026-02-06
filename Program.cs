@@ -55,10 +55,11 @@ builder.Services.AddSwaggerGen(options =>
     options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
         Name = "Authorization",
-        Description = "กรุณาใส่ Token ของคุณในรูปแบบ 'Bearer {token}'",
+        Description = "JWT Authorization header using the Bearer scheme.",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "Bearer",
+        BearerFormat = "JWT"
     });
 
     // 2. บอกให้ Swagger รู้ว่าต้องใช้ Security Scheme นี้

@@ -37,16 +37,29 @@ namespace DropInBadAPI.Controllers.Mobile
 
         // GET: api/GameSessions/my-history
         [HttpGet("my-history")]
-        public async Task<ActionResult<Response<IEnumerable<GameSessionSummaryDto>>>> GetMyHistory()
+        public async Task<ActionResult<Response<IEnumerable<OrganizerGameSessionDto>>>> GetMyHistory()
         {
             var sessions = await _sessionService.GetMyPastSessionsAsync(GetCurrentUserId());
-            var response = new Response<IEnumerable<GameSessionSummaryDto>>
+            var response = new Response<IEnumerable<OrganizerGameSessionDto>>
             {
                 Status = 200,
                 Message = "User's created sessions retrieved successfully.",
                 Data = sessions
             };
             return Ok(response);
+        }
+
+        // GET: api/GameSessions/{id}/analytics
+        [HttpGet("{id}/analytics")]
+        public async Task<ActionResult<Response<GameSessionAnalyticsDto>>> GetSessionAnalytics(int id)
+        {
+            var analytics = await _sessionService.GetSessionAnalyticsAsync(id, GetCurrentUserId());
+            if (analytics == null)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Session not found or you do not have permission." });
+            }
+
+            return Ok(new Response<GameSessionAnalyticsDto> { Status = 200, Message = "Session analytics retrieved successfully.", Data = analytics });
         }
 
         // GET: api/GameSessions/5
