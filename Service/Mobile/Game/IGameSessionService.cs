@@ -19,5 +19,8 @@ namespace DropInBadAPI.Service.Mobile.Game
         Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId);
         Task<(bool Success, string ErrorMessage)> StartSessionAsync(int sessionId, int organizerUserId);
         Task<GameSessionAnalyticsDto?> GetSessionAnalyticsAsync(int sessionId, int organizerUserId);
+        Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId);
+        Task<bool> StartCompetitionAsync(int sessionId, int organizerUserId);
+        Task<bool> EndCompetitionAsync(int sessionId, int organizerUserId);
     }
 }

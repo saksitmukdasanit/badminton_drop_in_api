@@ -64,6 +64,7 @@ namespace DropInBadAPI.Dtos
         public List<CourtStatusDto> Courts { get; set; } = new();
         public List<WaitingPlayerDto> WaitingPool { get; set; } = new();
         public List<StagedMatchDto> StagedMatches { get; set; } = new(); // เพิ่มส่วนสำหรับแสดงแมตช์ที่จัดล่วงหน้า
+        public DateTime? CompetitionStartTime { get; set; }
     }
 
     public class CourtStatusDto
@@ -104,6 +105,7 @@ namespace DropInBadAPI.Dtos
         public string? SkillLevelName { get; set; }
         public string? SkillLevelColor { get; set; }
         public DateTime CheckedInTime { get; set; }
+        public int TotalGamesPlayed { get; set; }
     }
 
     // ====== DTOs for POST /matches ======
@@ -143,6 +145,11 @@ namespace DropInBadAPI.Dtos
     public record SubmitResultDto(int Result, string? Notes); // 1=Win, 2=Loss, 3=Draw
 
     // ====== DTOs for POST /checkout ======
+
+      public class CheckoutRequestDto
+    {
+        public List<BillLineItemDto>? CustomLineItems { get; set; }
+    }
     public class BillSummaryDto
     {
         public int BillId { get; set; }
@@ -152,6 +159,13 @@ namespace DropInBadAPI.Dtos
     public class BillLineItemDto
     {
         public string Description { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    // --- NEW: DTO สำหรับการชำระเงิน ---
+    public class PaymentRequestDto
+    {
+        public string PaymentMethod { get; set; } // "Cash", "QR Code"
         public decimal Amount { get; set; }
     }
 

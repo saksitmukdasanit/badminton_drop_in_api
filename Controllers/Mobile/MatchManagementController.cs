@@ -69,20 +69,70 @@ namespace DropInBadAPI.Controllers.Mobile
             return Ok(new Response<object> { Status = 200, Message = "Result submitted successfully." });
         }
         
-        [HttpPost("participants/{participantType}/{participantId}/checkout")]
-        public async Task<ActionResult<Response<BillSummaryDto>>> CheckoutParticipant(string participantType, int participantId)
+        // --- NEW: API สำหรับดูยอด (Preview) ---
+        [HttpGet("participants/{participantType}/{participantId}/bill-preview")]
+        public async Task<ActionResult<Response<BillSummaryDto>>> GetBillPreview(string participantType, int participantId)
         {
-            if(participantType != "member" && participantType != "guest")
+            if (!participantType.Equals("member", StringComparison.OrdinalIgnoreCase) && 
+                !participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
             {
                 return BadRequest(new Response<object> { Status = 400, Message = "Participant type must be 'member' or 'guest'." });
             }
 
-            var bill = await _matchService.CheckoutParticipantAsync(participantType, participantId, GetCurrentUserId());
+            var bill = await _matchService.GetParticipantBillPreviewAsync(participantType.ToLower(), participantId, GetCurrentUserId());
             if (bill == null)
             {
-                return NotFound(new Response<object> { Status = 404, Message = "Participant not found or checkout failed." });
+                return NotFound(new Response<object> { Status = 404, Message = "Participant not found." });
             }
-            return Ok(new Response<BillSummaryDto> { Status = 200, Message = "Checkout successful.", Data = bill });
+            return Ok(new Response<BillSummaryDto> { Status = 200, Message = "Bill preview retrieved successfully.", Data = bill });
+        }
+
+        // --- UPDATED: API สำหรับเช็คบิลจริง (Checkout) ---
+        [HttpPost("participants/{participantType}/{participantId}/checkout")]
+        public async Task<ActionResult<Response<BillSummaryDto>>> CheckoutParticipant(string participantType, int participantId, [FromBody] CheckoutRequestDto? dto = null)
+        {
+            // FIX: ปรับให้รองรับตัวพิมพ์เล็ก/ใหญ่ (Case-Insensitive)
+            if (!participantType.Equals("member", StringComparison.OrdinalIgnoreCase) && 
+                !participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = "Participant type must be 'member' or 'guest'." });
+            }
+
+            try
+            {
+                var bill = await _matchService.CheckoutParticipantAsync(participantType.ToLower(), participantId, GetCurrentUserId(), dto);
+                if (bill == null)
+                {
+                    return NotFound(new Response<object> { Status = 404, Message = "Participant not found or checkout failed." });
+                }
+                return Ok(new Response<BillSummaryDto> { Status = 200, Message = "Checkout successful.", Data = bill });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new Response<object> { Status = 500, Message = $"Internal Server Error: {ex.Message}" });
+            }
+        }
+
+        // --- NEW: API สำหรับบันทึกการชำระเงิน (Pay) ---
+        [HttpPost("bills/{billId}/pay")]
+        public async Task<ActionResult<Response<object>>> PayBill(int billId, [FromBody] PaymentRequestDto dto)
+        {
+            var success = await _matchService.PayBillAsync(billId, GetCurrentUserId(), dto);
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = "Payment failed or bill not found." });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Payment recorded successfully." });
+        }
+
+        // --- NEW: API สำหรับยกเลิกบิล ---
+        [HttpPut("bills/{billId}/cancel")]
+        public async Task<ActionResult<Response<object>>> CancelBill(int billId)
+        {
+            // หมายเหตุ: ต้องเพิ่ม CancelBillAsync ใน Interface IMatchManagementService ด้วยนะครับ
+            var success = await _matchService.CancelBillAsync(billId, GetCurrentUserId());
+            if (!success) return BadRequest(new Response<object> { Status = 400, Message = "Failed to cancel bill." });
+            return Ok(new Response<object> { Status = 200, Message = "Bill cancelled." });
         }
 
         [HttpPost("gamesessions/{sessionId}/checkin")]

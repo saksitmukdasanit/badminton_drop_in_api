@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 
 namespace DropInBadAPI.Models;
@@ -50,6 +50,10 @@ public partial class GameSession
     public DateTime CreatedDate { get; set; }
 
     public DateTime? UpdatedDate { get; set; }
+
+    public DateTime? CompetitionStartTime { get; set; }
+
+    public DateTime? CompetitionEndTime { get; set; }
 
     public virtual User CreatedByUser { get; set; } = null!;
 

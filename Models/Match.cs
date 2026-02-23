@@ -17,6 +17,8 @@ public partial class Match
 
     public short? Status { get; set; }
 
+    public int ShuttlecocksUsed { get; set; }
+
     public DateTime CreatedDate { get; set; }
 
     public int? CreatedBy { get; set; }

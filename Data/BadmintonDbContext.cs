@@ -198,6 +198,7 @@ public partial class BadmintonDbContext : DbContext
             entity.Property(e => e.MatchId).HasColumnName("MatchID");
             entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
             entity.Property(e => e.SessionId).HasColumnName("SessionID");
+            entity.Property(e => e.ShuttlecocksUsed).HasDefaultValue(0);
 
             entity.HasOne(d => d.Session).WithMany(p => p.Matches)
                 .HasForeignKey(d => d.SessionId)

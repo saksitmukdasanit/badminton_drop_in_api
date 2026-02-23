@@ -123,20 +123,34 @@ namespace DropInBadAPI.Repositories
 
         public async Task<(string? AccessToken, string? RefreshToken)> RefreshTokenAsync(string accessToken, string refreshToken)
         {
-            var principal = _jwtService.GetPrincipalFromExpiredToken(accessToken);
-            var userIdString = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-
-            if (userIdString == null) return (null, null);
-
-            var userLogin = await _context.UserLogins.SingleOrDefaultAsync(u => u.UserId == int.Parse(userIdString));
-
-            if (userLogin == null)
+            // 1. พยายามแกะ UserID จาก Access Token (ถ้าทำได้)
+            int? userIdFromAccessToken = null;
+            try 
             {
-                return (null, null); // Refresh Token ไม่ถูกต้อง หรือหมดอายุ
+                var principal = _jwtService.GetPrincipalFromExpiredToken(accessToken);
+                var claimValue = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                if (claimValue != null) userIdFromAccessToken = int.Parse(claimValue);
             }
-            if (userLogin == null || userLogin.RefreshToken != refreshToken || userLogin.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            catch
             {
-                return (null, null); // Refresh Token ไม่ถูกต้อง หรือหมดอายุ
+                // FIX: ถ้าแกะ Access Token ไม่ได้ (เช่น เสียรูปแบบ) ให้ปล่อยผ่านไปก่อน 
+                // แล้วไปตัดสินจาก Refresh Token ในฐานข้อมูลแทน
+            }
+
+            // 2. ค้นหา UserLogin จาก Refresh Token โดยตรง
+            var userLogin = await _context.UserLogins.FirstOrDefaultAsync(u => u.RefreshToken == refreshToken);
+
+            // 3. ตรวจสอบความถูกต้องของ Refresh Token
+            if (userLogin == null || userLogin.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                return (null, null); // ไม่เจอ หรือ หมดอายุ -> จบ
+            }
+
+            // 4. (Optional) ถ้าแกะ Access Token ได้ ต้องตรวจสอบว่าตรงกัน
+            // แต่ถ้าแกะไม่ได้ (userIdFromAccessToken == null) เราจะเชื่อ Refresh Token ไปเลย
+            if (userIdFromAccessToken.HasValue && userLogin.UserId != userIdFromAccessToken.Value)
+            {
+                return (null, null); // Token เป็นของคนละคนกัน (Mismatch) -> จบ
             }
 
             var user = await _context.Users.FindAsync(userLogin.UserId);
@@ -148,6 +162,7 @@ namespace DropInBadAPI.Repositories
 
             // อัปเดต Refresh Token ในฐานข้อมูล
             userLogin.RefreshToken = newRefreshToken;
+            userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(90); // --- FIX: ต่ออายุวันหมดอายุไปอีก 90 วัน ---
             await _context.SaveChangesAsync();
 
             return (newAccessToken, newRefreshToken);

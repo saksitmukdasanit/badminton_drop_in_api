@@ -230,5 +230,39 @@ namespace DropInBadAPI.Controllers.Mobile
 
             return Ok(new Response<object> { Status = 200, Message = "Session successfully started." });
         }
+
+        [HttpGet("{id}/financials")]
+        public async Task<ActionResult<Response<GameSessionFinancialsDto>>> GetSessionFinancials(int id)
+        {
+            var financials = await _sessionService.GetSessionFinancialsAsync(id, GetCurrentUserId());
+            if (financials == null)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Session not found or you do not have permission." });
+            }
+
+            return Ok(new Response<GameSessionFinancialsDto> { Status = 200, Message = "Financials retrieved successfully.", Data = financials });
+        }
+
+        [HttpPost("{id}/start-competition")]
+        public async Task<ActionResult<Response<object>>> StartCompetition(int id)
+        {
+            var success = await _sessionService.StartCompetitionAsync(id, GetCurrentUserId());
+            if (!success)
+            {
+                return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or permission denied." });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Competition started." });
+        }
+
+        [HttpPost("{id}/end-competition")]
+        public async Task<ActionResult<Response<object>>> EndCompetition(int id)
+        {
+            var success = await _sessionService.EndCompetitionAsync(id, GetCurrentUserId());
+            if (!success)
+            {
+                return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or permission denied." });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Competition ended." });
+        }
     }
 }

@@ -161,6 +161,22 @@ namespace DropInBadAPI.Services
             var walkinsInStagedMatchIds = stagedMatches
                 .SelectMany(m => m.MatchPlayers).Where(mp => mp.WalkinId.HasValue).Select(mp => mp.WalkinId).ToHashSet();
 
+            // --- NEW: นับจำนวนเกมที่เล่นจบแล้ว (Status = 2) ของแต่ละคน ---
+            var finishedMatchPlayers = await _context.MatchPlayers
+                .Where(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 2)
+                .Select(mp => new { mp.UserId, mp.WalkinId, EndTime = mp.Match.EndTime }) // เพิ่ม EndTime
+                .ToListAsync();
+
+            var memberGameCounts = finishedMatchPlayers
+                .Where(mp => mp.UserId.HasValue)
+                .GroupBy(mp => mp.UserId)
+                .ToDictionary(g => g.Key!.Value, g => new { Count = g.Count(), LastPlayed = g.Max(x => x.EndTime) }); // เก็บเวลาเล่นล่าสุด
+
+            var guestGameCounts = finishedMatchPlayers
+                .Where(mp => mp.WalkinId.HasValue)
+                .GroupBy(mp => mp.WalkinId)
+                .ToDictionary(g => g.Key!.Value, g => new { Count = g.Count(), LastPlayed = g.Max(x => x.EndTime) }); // เก็บเวลาเล่นล่าสุด
+
             var waitingMembers = await _context.SessionParticipants
                 .Where(p => p.SessionId == sessionId && p.CheckinTime != null && p.CheckoutTime == null && !playersInMatchIds.Contains(p.UserId) && !playersInStagedMatchIds.Contains(p.UserId))
                 .Include(p => p.User.UserProfile)
@@ -175,7 +191,10 @@ namespace DropInBadAPI.Services
                     SkillLevelId = p.SkillLevel != null ? p.SkillLevel.SkillLevelId : null,
                     SkillLevelName = p.SkillLevel != null ? p.SkillLevel.LevelName : null,
                     SkillLevelColor = p.SkillLevel != null ? p.SkillLevel.ColorHexCode : null,
-                    CheckedInTime = p.CheckinTime.Value
+                    // ถ้าเคยเล่นแล้ว ให้ใช้เวลาจบเกมล่าสุดเป็นเวลาเริ่มรอ ถ้ายังไม่เคยให้ใช้เวลา Checkin
+                    CheckedInTime = (memberGameCounts.ContainsKey(p.UserId) && memberGameCounts[p.UserId].LastPlayed.HasValue && memberGameCounts[p.UserId].LastPlayed > p.CheckinTime) 
+                                    ? memberGameCounts[p.UserId].LastPlayed.Value : p.CheckinTime.Value,
+                    TotalGamesPlayed = memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId].Count : 0
                 })
                 .ToListAsync();
 
@@ -192,7 +211,10 @@ namespace DropInBadAPI.Services
                         SkillLevelId = g.SkillLevel != null ? g.SkillLevel.SkillLevelId : null,
                         SkillLevelName = g.SkillLevel != null ? g.SkillLevel.LevelName : null,
                         SkillLevelColor = g.SkillLevel != null ? g.SkillLevel.ColorHexCode : null,
-                        CheckedInTime = g.CheckinTime.Value
+                        // ถ้าเคยเล่นแล้ว ให้ใช้เวลาจบเกมล่าสุดเป็นเวลาเริ่มรอ
+                        CheckedInTime = (guestGameCounts.ContainsKey(g.WalkinId) && guestGameCounts[g.WalkinId].LastPlayed.HasValue && guestGameCounts[g.WalkinId].LastPlayed > g.CheckinTime)
+                                        ? guestGameCounts[g.WalkinId].LastPlayed.Value : g.CheckinTime.Value,
+                        TotalGamesPlayed = guestGameCounts.ContainsKey(g.WalkinId) ? guestGameCounts[g.WalkinId].Count : 0
                     })
                     .ToListAsync();
 
@@ -242,7 +264,8 @@ namespace DropInBadAPI.Services
                 groupName = session.GroupName,
                 Courts = courtStatuses,
                 WaitingPool = allWaitingPlayers.OrderBy(p => p.CheckedInTime).ToList(),
-                StagedMatches = stagedMatchesDto
+                StagedMatches = stagedMatchesDto,
+                CompetitionStartTime = session.CompetitionStartTime
             };
 
             return result;
@@ -386,96 +409,254 @@ namespace DropInBadAPI.Services
             return true;
         }
 
-        public async Task<BillSummaryDto?> CheckoutParticipantAsync(string participantType, int participantId, int organizerUserId)
+        // --- NEW: ฟังก์ชันสำหรับดูยอด (เรียกใช้ Logic คำนวณร่วมกัน) ---
+        public async Task<BillSummaryDto?> GetParticipantBillPreviewAsync(string participantType, int participantId, int organizerUserId)
         {
-            GameSession session = null;
-            int? userId = null;
-            int? walkinId = null;
+            // เรียกใช้ Helper เพื่อคำนวณยอด แต่ไม่บันทึก (isPreview = true)
+            return await CalculateAndSaveBillAsync(participantType, participantId, organizerUserId, null, isPreview: true);
+        }
 
-            if (participantType == "member")
+        // --- UPDATED: ฟังก์ชันสำหรับเช็คบิลจริง ---
+        public async Task<BillSummaryDto?> CheckoutParticipantAsync(string participantType, int participantId, int organizerUserId, CheckoutRequestDto? customCheckout = null)
+        {
+            // เรียกใช้ Helper เพื่อคำนวณและบันทึก (isPreview = false)
+            return await CalculateAndSaveBillAsync(participantType, participantId, organizerUserId, customCheckout, isPreview: false);
+        }
+
+        // --- HELPER: รวม Logic การคำนวณไว้ที่นี่ ---
+        private async Task<BillSummaryDto?> CalculateAndSaveBillAsync(
+            string participantType, 
+            int participantId, 
+            int organizerUserId, 
+            CheckoutRequestDto? customCheckout, 
+            bool isPreview)
+        {
+            var strategy = _context.Database.CreateExecutionStrategy();
+            return await strategy.ExecuteAsync(async () =>
             {
-                var participant = await _context.SessionParticipants
-                    .Include(p => p.Session)
-                    .FirstOrDefaultAsync(p => p.ParticipantId == participantId);
+                _context.ChangeTracker.Clear();
 
-                if (participant == null || participant.Session.CreatedByUserId != organizerUserId) return null;
+                GameSession session = null;
+                int? userId = null;
+                int? walkinId = null;
 
-                participant.CheckoutTime = DateTime.UtcNow;
-                session = participant.Session;
-                userId = participant.UserId;
-            }
-            else if (participantType == "guest")
-            {
-                var guest = await _context.SessionWalkinGuests
-                    .Include(g => g.Session)
-                    .FirstOrDefaultAsync(g => g.WalkinId == participantId);
-
-                if (guest == null || guest.Session.CreatedByUserId != organizerUserId) return null;
-
-                guest.CheckoutTime = DateTime.UtcNow;
-                session = guest.Session;
-                walkinId = guest.WalkinId;
-            }
-            else
-            {
-                return null;
-            }
-
-            await using var transaction = await _context.Database.BeginTransactionAsync();
-            try
-            {
-                var lineItems = new List<BillLineItem>();
-                decimal totalAmount = 0;
-
-                if (session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
+                // FIX: ใช้ StringComparison.OrdinalIgnoreCase เพื่อความชัวร์
+                if (participantType.Equals("member", StringComparison.OrdinalIgnoreCase))
                 {
-                    var amount = session.CourtFeePerPerson.Value;
-                    lineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = amount });
-                    totalAmount += amount;
+                    var participant = await _context.SessionParticipants
+                        .Include(p => p.Session)
+                        .FirstOrDefaultAsync(p => p.ParticipantId == participantId);
+
+                    if (participant == null || participant.Session.CreatedByUserId != organizerUserId) return null;
+
+                    // ถ้าไม่ใช่ Preview ถึงจะอัปเดตเวลาออก
+                    if (!isPreview) participant.CheckoutTime = DateTime.UtcNow;
+                    session = participant.Session;
+                    userId = participant.UserId;
+                }
+                else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
+                {
+                    var guest = await _context.SessionWalkinGuests
+                        .Include(g => g.Session)
+                        .FirstOrDefaultAsync(g => g.WalkinId == participantId);
+
+                    if (guest == null || guest.Session.CreatedByUserId != organizerUserId) return null;
+
+                    // ถ้าไม่ใช่ Preview ถึงจะอัปเดตเวลาออก
+                    if (!isPreview) guest.CheckoutTime = DateTime.UtcNow;
+                    session = guest.Session;
+                    walkinId = guest.WalkinId;
+                }
+                else
+                {
+                    return null;
                 }
 
-                if (session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
+                // --- NEW: ถ้าเป็น Preview ให้ลองดึงบิลล่าสุดที่ยังไม่ยกเลิกมาแสดงก่อน (เพื่อให้เห็นยอดอื่นๆ ที่บันทึกไว้) ---
+                if (isPreview)
                 {
-                    var amount = session.ShuttlecockFeePerPerson.Value;
-                    lineItems.Add(new BillLineItem { Description = "ค่าลูกแบด", Amount = amount });
-                    totalAmount += amount;
+                    var existingBill = await _context.ParticipantBills
+                        .Include(b => b.BillLineItems)
+                        .Where(b => b.SessionId == session.SessionId &&
+                                    ((userId != null && b.UserId == userId) || (walkinId != null && b.WalkinId == walkinId)) &&
+                                    b.Status != 3) // 3 = Cancelled
+                        .OrderByDescending(b => b.CreatedDate)
+                        .FirstOrDefaultAsync();
+
+                    if (existingBill != null)
+                    {
+                        return new BillSummaryDto
+                        {
+                            BillId = existingBill.BillId,
+                            TotalAmount = existingBill.TotalAmount,
+                            LineItems = existingBill.BillLineItems.Select(li => new BillLineItemDto { Description = li.Description, Amount = li.Amount }).ToList()
+                        };
+                    }
                 }
 
-                var newBill = new ParticipantBill
-                {
-                    SessionId = session.SessionId,
-                    UserId = userId,
-                    WalkinId = walkinId,
-                    TotalAmount = totalAmount,
-                    Status = 1,
-                    CreatedDate = DateTime.UtcNow
-                };
-                await _context.ParticipantBills.AddAsync(newBill);
-                await _context.SaveChangesAsync();
+                // --- NEW: ดึงข้อมูลแมตช์ที่เล่นจบแล้วเพื่อคำนวณค่าใช้จ่ายตามจริง ---
+                var matchesPlayed = await _context.Matches
+                    .Where(m => m.SessionId == session.SessionId && m.Status == 2 && // 2=Ended
+                                m.MatchPlayers.Any(mp => (userId != null && mp.UserId == userId) || (walkinId != null && mp.WalkinId == walkinId)))
+                    .Include(m => m.MatchPlayers)
+                    .ToListAsync();
 
-                foreach (var item in lineItems)
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    item.BillId = newBill.BillId;
+                    var lineItems = new List<BillLineItem>();
+                    decimal totalAmount = 0;
+
+                    // --- LOGIC ใหม่: ถ้ามีข้อมูลจากหน้าบ้าน (customCheckout) ให้ใช้ข้อมูลนั้นเลย ---
+                    if (customCheckout != null && customCheckout.CustomLineItems != null && customCheckout.CustomLineItems.Any())
+                    {
+                        foreach (var item in customCheckout.CustomLineItems)
+                        {
+                            lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                            totalAmount += item.Amount;
+                        }
+                    }
+                    else
+                    {
+                        // --- LOGIC เดิม: คำนวณที่ Server (Fallback) ---
+                        if (session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
+                        {
+                            var amount = session.CourtFeePerPerson.Value;
+                            lineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = amount });
+                            totalAmount += amount;
+                        }
+
+                        // เพิ่มค่าธรรมเนียม 10 บาท (Service Fee)
+                        decimal serviceFee = 10;
+                        lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                        totalAmount += serviceFee;
+
+                        // ตรวจสอบ CostingMethod
+                        bool isBuffet = session.CostingMethod == 2;
+
+                        if (isBuffet && session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
+                        {
+                            var amount = session.ShuttlecockFeePerPerson.Value;
+                            lineItems.Add(new BillLineItem { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = amount });
+                            totalAmount += amount;
+                        }
+                        else if (session.ShuttlecockCostPerUnit.HasValue && session.ShuttlecockCostPerUnit > 0)
+                        {
+                            decimal shuttleCost = 0;
+                            foreach (var match in matchesPlayed)
+                            {
+                                int playersCount = match.MatchPlayers.Count;
+                                if (playersCount > 0)
+                                {
+                                    decimal matchCost = (match.ShuttlecocksUsed * session.ShuttlecockCostPerUnit.Value) / playersCount;
+                                    shuttleCost += matchCost;
+                                }
+                            }
+                            
+                            shuttleCost = Math.Ceiling(shuttleCost);
+                            if (shuttleCost > 0)
+                            {
+                                lineItems.Add(new BillLineItem { Description = $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = shuttleCost });
+                                totalAmount += shuttleCost;
+                            }
+                        }
+                        // --- NEW: เพิ่ม Logic สำหรับคิดค่าลูกแบดแบบ "ต่อคนต่อเกม" (CostingMethod = 1 หรือ null) ---
+                        else if (session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
+                        {
+                            // คิดตามจำนวนเกมที่เล่นจริง
+                            decimal shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed.Count;
+                            lineItems.Add(new BillLineItem { Description = $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = shuttleTotal });
+                            totalAmount += shuttleTotal;
+                        }
+                    }
+
+                    // --- ถ้าเป็น Preview ให้ส่งกลับเลย ไม่ต้องบันทึก ---
+                    if (isPreview)
+                    {
+                        return new BillSummaryDto
+                        {
+                            BillId = 0, // Dummy ID
+                            TotalAmount = totalAmount,
+                            LineItems = lineItems.Select(li => new BillLineItemDto { Description = li.Description, Amount = li.Amount }).ToList()
+                        };
+                    }
+
+                    // --- ถ้าไม่ใช่ Preview ให้บันทึกลง DB ---
+                    var newBill = new ParticipantBill
+                    {
+                        SessionId = session.SessionId,
+                        UserId = userId,
+                        WalkinId = walkinId,
+                        TotalAmount = totalAmount,
+                        Status = 1,
+                        CreatedDate = DateTime.UtcNow
+                    };
+                    await _context.ParticipantBills.AddAsync(newBill);
+                    await _context.SaveChangesAsync();
+
+                    foreach (var item in lineItems) item.BillId = newBill.BillId;
+                    await _context.BillLineItems.AddRangeAsync(lineItems);
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    var billSummary = new BillSummaryDto
+                    {
+                        BillId = newBill.BillId,
+                        TotalAmount = newBill.TotalAmount,
+                        LineItems = lineItems.Select(li => new BillLineItemDto { Description = li.Description, Amount = li.Amount }).ToList()
+                    };
+
+                    return billSummary;
                 }
-                await _context.BillLineItems.AddRangeAsync(lineItems);
-
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                var billSummary = new BillSummaryDto
+                catch (Exception)
                 {
-                    BillId = newBill.BillId,
-                    TotalAmount = newBill.TotalAmount,
-                    LineItems = lineItems.Select(li => new BillLineItemDto { Description = li.Description, Amount = li.Amount }).ToList()
-                };
+                    await transaction.RollbackAsync();
+                    throw;
+                }
+            });
+        }
 
-                return billSummary;
-            }
-            catch (Exception)
+        // --- NEW: ฟังก์ชันบันทึกการจ่ายเงิน ---
+        public async Task<bool> PayBillAsync(int billId, int organizerUserId, PaymentRequestDto dto)
+        {
+            var bill = await _context.ParticipantBills
+                .Include(b => b.Session)
+                .FirstOrDefaultAsync(b => b.BillId == billId);
+
+            if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return false;
+
+            // 1. อัปเดตสถานะบิลเป็นจ่ายแล้ว (Status = 2)
+            bill.Status = 2; 
+
+            // 2. บันทึกประวัติการจ่ายเงิน (ถ้ามีตาราง Payments)
+            var payment = new Payment
             {
-                await transaction.RollbackAsync();
-                throw;
-            }
+                BillId = billId,
+                PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1, // 1=Cash, 2=QR
+                Amount = dto.Amount,
+                PaymentDate = DateTime.UtcNow,
+                ReceivedByUserId = organizerUserId
+            };
+            
+            // หมายเหตุ: ต้องแน่ใจว่า DbContext มี DbSet<Payment> Payments
+            await _context.Payments.AddAsync(payment);
+            
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        // --- NEW: ฟังก์ชันยกเลิกบิล (เพื่อไม่ให้ยอดทบกันเมื่อจ่ายใหม่) ---
+        public async Task<bool> CancelBillAsync(int billId, int organizerUserId)
+        {
+            var bill = await _context.ParticipantBills
+                .Include(b => b.Session)
+                .FirstOrDefaultAsync(b => b.BillId == billId);
+
+            if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return false;
+
+            bill.Status = 3; // 3 = Cancelled
+            await _context.SaveChangesAsync();
+            return true;
         }
 
         public async Task<(bool Success, string Message)> CheckinParticipantAsync(int sessionId, CheckinDto dto)
@@ -486,7 +667,7 @@ namespace DropInBadAPI.Services
                 {
                     var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.ParticipantId == dto.ParticipantId.Value);
                     if (participant == null) return (false, "Member not found in this session.");
-                    if (participant.CheckinTime != null) return (false, "Member already checked in.");
+                    // if (participant.CheckinTime != null) return (false, "Member already checked in."); // อนุญาตให้ Check-in ซ้ำได้
 
                     participant.CheckinTime = DateTime.UtcNow;
                     await _context.SaveChangesAsync();
@@ -496,7 +677,7 @@ namespace DropInBadAPI.Services
                 {
                     var guest = await _context.SessionWalkinGuests.FirstOrDefaultAsync(g => g.SessionId == sessionId && g.WalkinId == dto.ParticipantId.Value);
                     if (guest == null) return (false, "Guest not found in this session.");
-                    if (guest.CheckinTime != null) return (false, "Guest already checked in.");
+                    // if (guest.CheckinTime != null) return (false, "Guest already checked in."); // อนุญาตให้ Check-in ซ้ำได้
 
                     guest.CheckinTime = DateTime.UtcNow;
                     await _context.SaveChangesAsync();
@@ -514,7 +695,7 @@ namespace DropInBadAPI.Services
 
                 var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == user.UserId);
                 if (participant == null) return (false, "This user is not registered for this session.");
-                if (participant.CheckinTime != null) return (false, "User already checked in.");
+                // if (participant.CheckinTime != null) return (false, "User already checked in."); // อนุญาตให้ Check-in ซ้ำได้
 
                 participant.CheckinTime = DateTime.UtcNow;
                 await _context.SaveChangesAsync();

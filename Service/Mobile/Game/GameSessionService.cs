@@ -785,7 +785,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             var thaiCulture = new CultureInfo("th-TH");
 
             var sessions = await _context.GameSessions
-        .Where(s => s.CreatedByUserId == organizerUserId && s.SessionDate >= today && s.Status != 3)
+        .Where(s => s.CreatedByUserId == organizerUserId && s.SessionDate >= today && (s.Status == 1 || s.Status == 2))
         .Include(s => s.Venue)
         .Include(s => s.GameSessionPhotos)
         .Include(s => s.CreatedByUser.UserProfile)
@@ -976,7 +976,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 GroupName = session.GroupName,
                 Date = session.SessionDate.ToDateTime(session.StartTime),
                 TotalGames = matches.Count,
-                TotalShuttlecocks = 0 // TODO: ถ้ามีฟิลด์เก็บจำนวนลูกใน Match ให้ Sum ตรงนี้
+                TotalShuttlecocks = matches.Sum(m => m.ShuttlecocksUsed)
             };
 
             if (matches.Any())
@@ -1021,7 +1021,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 {
                     MatchId = m.MatchId,
                     CourtNumber = m.CourtNumber ?? "-",
-                    ShuttlecocksUsed = 0, // TODO: ใส่ค่าจริงถ้ามี
+                    ShuttlecocksUsed = m.ShuttlecocksUsed,
                     TeamA = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "A").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A")),
                     TeamB = string.Join(", ", m.MatchPlayers.Where(p => p.Team == "B").Select(p => p.User?.UserProfile?.Nickname ?? p.Walkin?.GuestName ?? "N/A")),
                     Duration = (m.StartTime.HasValue && m.EndTime.HasValue) ? (m.EndTime.Value - m.StartTime.Value).ToString(@"mm\:ss") : "-"
@@ -1056,6 +1056,160 @@ namespace DropInBadAPI.Service.Mobile.Game
 
             await _context.SaveChangesAsync();
             return (true, "Session started successfully.");
+        }
+
+        public async Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId)
+        {
+            var session = await _context.GameSessions
+                .Include(s => s.SessionParticipants).ThenInclude(p => p.User.UserProfile)
+                .Include(s => s.SessionWalkinGuests)
+                .Include(s => s.ParticipantBills)
+                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+
+            if (session == null) return null;
+
+            // 1. Participants (Active only)
+            var activeMembers = session.SessionParticipants.Where(p => p.Status == 1).ToList();
+            var activeGuests = session.SessionWalkinGuests.Where(g => g.Status == 1).ToList();
+            int currentParticipants = activeMembers.Count + activeGuests.Count;
+
+            // 2. Fees & Costs
+            decimal courtFeePerPerson = session.CourtFeePerPerson ?? 0;
+            decimal shuttleFeePerPerson = session.ShuttlecockFeePerPerson ?? 0;
+            decimal totalCourtCost = session.TotalCourtCost ?? 0; // ต้นทุนที่ผู้จัดจ่าย
+
+            // 3. Income Calculation (Expected)
+            decimal totalCourtIncome = currentParticipants * courtFeePerPerson;
+            decimal totalShuttleIncome = currentParticipants * shuttleFeePerPerson;
+            decimal totalExpectedIncome = totalCourtIncome + totalShuttleIncome;
+
+            // 4. Paid Amount (Actual from bills)
+            decimal paidAmount = session.ParticipantBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount); // สมมติ Status 2 = Paid
+            // ถ้ายังไม่มี Status ชัดเจน ให้รวมทั้งหมดไปก่อน หรือปรับตาม Logic ของระบบ
+            paidAmount = session.ParticipantBills.Sum(b => b.TotalAmount);
+
+            // 5. Unpaid
+            decimal unpaidAmount = totalExpectedIncome - paidAmount;
+            if (unpaidAmount < 0) unpaidAmount = 0;
+
+            // 6. Participant Details
+            var participantDtos = new List<ParticipantFinancialDto>();
+
+            // Helper to count games
+            int CountGames(int? userId, int? walkinId)
+            {
+                return session.Matches.Count(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId && mp.WalkinId == walkinId));
+            }
+
+            // Helper to get bill info
+            (decimal paid, decimal total) GetBillInfo(int? userId, int? walkinId, int gamesPlayed)
+            {
+                // กรองเอาเฉพาะบิลที่ยังไม่ถูกยกเลิก (Status != 3)
+                var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
+                
+                // นับยอดจ่ายเฉพาะบิลที่ Status = 2 (Paid) หรือจะนับทั้งหมดตาม Logic เดิมก็ได้
+                decimal paid = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount); 
+
+                // FIX: ถ้ามีการจ่ายเงินแล้ว (paid > 0) ให้ใช้ยอดจากบิล
+                if (paid > 0)
+                {
+                    return (paid, bills.Sum(b => b.TotalAmount));
+                }
+
+                // FIX: คำนวณค่าลูกแบดตามจำนวนเกม (ถ้าไม่ใช่บุฟเฟต์)
+                // หมายเหตุ: ถ้า CostingMethod เป็น null ให้ถือว่าเป็น Per Game (1)
+                decimal calculatedShuttleFee = shuttleFeePerPerson;
+                if (session.CostingMethod != 2) 
+                {
+                    calculatedShuttleFee = shuttleFeePerPerson * gamesPlayed;
+                }
+
+                decimal total = courtFeePerPerson + calculatedShuttleFee + 10;
+                return (paid, total);
+            }
+
+            foreach (var m in activeMembers)
+            {
+                int games = CountGames(m.UserId, null);
+                var (paid, total) = GetBillInfo(m.UserId, null, games);
+                participantDtos.Add(new ParticipantFinancialDto
+                {
+                    ParticipantId = m.ParticipantId,
+                    ParticipantType = "Member",
+                    Nickname = m.User?.UserProfile?.Nickname ?? "N/A",
+                    Name = $"{m.User?.UserProfile?.FirstName} {m.User?.UserProfile?.LastName}",
+                    GamesPlayed = games,
+                    TotalCost = total,
+                    PaidAmount = paid,
+                    UnpaidAmount = total - paid > 0 ? total - paid : 0
+                });
+            }
+
+            foreach (var g in activeGuests)
+            {
+                int games = CountGames(null, g.WalkinId);
+                var (paid, total) = GetBillInfo(null, g.WalkinId, games);
+                participantDtos.Add(new ParticipantFinancialDto
+                {
+                    ParticipantId = g.WalkinId,
+                    ParticipantType = "Guest",
+                    Nickname = g.GuestName,
+                    Name = g.GuestName,
+                    GamesPlayed = games,
+                    TotalCost = total,
+                    PaidAmount = paid,
+                    UnpaidAmount = total - paid > 0 ? total - paid : 0
+                });
+            }
+
+            return new GameSessionFinancialsDto
+            {
+                SessionId = session.SessionId,
+                GroupName = session.GroupName,
+                CurrentParticipants = currentParticipants,
+                CourtFeePerPerson = courtFeePerPerson,
+                ShuttlecockFeePerPerson = shuttleFeePerPerson,
+                TotalCourtCost = totalCourtCost,
+                TotalCourtIncome = totalCourtIncome,
+                TotalShuttlecockFee = totalShuttleIncome,
+                TotalIncome = totalExpectedIncome,
+                TotalExpense = totalCourtCost, // เบื้องต้นให้เท่ากับค่าสนาม
+                PaidAmount = paidAmount,
+                UnpaidAmount = unpaidAmount,
+                TotalShuttlecocks = session.Matches.Sum(m => m.ShuttlecocksUsed),
+                Participants = participantDtos
+            };
+        }
+
+        public async Task<bool> StartCompetitionAsync(int sessionId, int organizerUserId)
+        {
+            var session = await _context.GameSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+            if (session == null) return false;
+
+            // บันทึกเวลาเริ่ม ถ้ายังไม่เคยเริ่ม
+            if (session.CompetitionStartTime == null)
+            {
+                session.CompetitionStartTime = DateTime.UtcNow;
+            }
+            
+            // อัปเดตสถานะเป็น Started (2) ด้วยเพื่อให้สอดคล้องกัน
+            if (session.Status == 1) session.Status = 2;
+
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> EndCompetitionAsync(int sessionId, int organizerUserId)
+        {
+            var session = await _context.GameSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+            if (session == null) return false;
+
+            session.CompetitionEndTime = DateTime.UtcNow;
+            session.Status = 4; // กำหนดสถานะเป็น 4 (จบการแข่งขัน)
+            await _context.SaveChangesAsync();
+            return true;
         }
     }
 }
