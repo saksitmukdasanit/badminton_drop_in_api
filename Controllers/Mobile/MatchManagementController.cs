@@ -149,8 +149,24 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPost("gamesessions/{sessionId}/walkin-guests")]
         public async Task<ActionResult<Response<WaitingPlayerDto>>> AddWalkinGuest(int sessionId, [FromBody] AddWalkinDto dto)
         {
-            var newGuest = await _matchService.AddWalkinGuestAsync(sessionId, dto);
+            var newGuest = await _matchService.AddWalkinGuestAsync(sessionId, GetCurrentUserId(), dto);
             return Ok(new Response<WaitingPlayerDto> { Status = 200, Message = "Walk-in guest added successfully.", Data = newGuest });
+        }
+
+        [HttpGet("organizer/previous-guests")]
+        public async Task<ActionResult<Response<List<GuestSuggestionDto>>>> GetPreviousGuests([FromQuery] string? query)
+        {
+            // Fallback: ถ้า query เป็น null ลองดึงจาก Request โดยตรง (เผื่อมีปัญหา Binding)
+            if (string.IsNullOrEmpty(query) && Request.Query.ContainsKey("query"))
+            {
+                query = Request.Query["query"].ToString();
+            }
+
+            var searchTerm = query ?? "";
+            var guests = await _matchService.SearchPreviousGuestsAsync(GetCurrentUserId(), searchTerm);
+            
+            // DEBUG: ส่งค่า query กลับมาดูว่า Server เห็นเป็นอะไร
+            return Ok(new Response<List<GuestSuggestionDto>> { Status = 200, Message = $"Guests retrieved. (Server received query: '{searchTerm}')", Data = guests });
         }
 
         [HttpPut("participants/{participantType}/{participantId}/skill")]

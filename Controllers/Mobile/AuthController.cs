@@ -50,10 +50,10 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPost("login")]
         public async Task<ActionResult<Response<LoginResponseDto>>> Login([FromBody] LoginDto loginDto)
         {
-            var (accessToken, refreshToken) = await _authService.LoginUserAsync(loginDto);
+            var (accessToken, refreshToken, errorMessage) = await _authService.LoginUserAsync(loginDto);
             if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(refreshToken))
             {
-                return Unauthorized(new Response<object> { Status = 401, Message = "Invalid username or password." });
+                return Unauthorized(new Response<object> { Status = 401, Message = errorMessage ?? "Invalid username or password." });
             }
 
             var data = new LoginResponseDto(accessToken, refreshToken);
@@ -127,5 +127,37 @@ namespace DropInBadAPI.Controllers.Mobile
             }
             return Ok(new Response<object> { Status = 200, Message = "Password has been reset successfully." });
         }
+
+        // --- OTP Endpoints ---
+
+        [HttpPost("verify-otp")]
+        [AllowAnonymous]
+        public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
+        {
+            var (success, message) = await _authService.VerifyOtpAsync(dto.PhoneNumber, dto.Otp);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = message });
+            }
+            return Ok(new Response<object> { Status = 200, Message = message });
+        }
+
+        [HttpPost("resend-otp")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ResendOtp([FromBody] ResendOtpDto dto)
+        {
+            var (success, message) = await _authService.ResendOtpAsync(dto.PhoneNumber);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = message });
+            }
+            return Ok(new Response<object> { Status = 200, Message = message });
+        }
     }
+
+    // DTOs สำหรับ OTP (ใส่ไว้ในไฟล์เดียวกันหรือแยกไฟล์ก็ได้)
+    public record VerifyOtpDto(string PhoneNumber, string Otp);
+    public record ResendOtpDto(string PhoneNumber);
 }

@@ -12,7 +12,8 @@ namespace DropInBadAPI.Interfaces
         Task<BillSummaryDto?> CheckoutParticipantAsync(string participantType, int participantId, int organizerUserId, CheckoutRequestDto? customCheckout = null);
         Task<bool> PayBillAsync(int billId, int organizerUserId, PaymentRequestDto dto); // --- NEW ---
         Task<(bool Success, string Message)> CheckinParticipantAsync(int sessionId, CheckinDto dto);
-        Task<WaitingPlayerDto> AddWalkinGuestAsync(int sessionId, AddWalkinDto dto);
+        Task<WaitingPlayerDto> AddWalkinGuestAsync(int sessionId, int organizerUserId, AddWalkinDto dto);
+        Task<List<GuestSuggestionDto>> SearchPreviousGuestsAsync(int organizerUserId, string? query);
         Task<bool> UpdateParticipantSkillAsync(string participantType, int participantId, UpdateParticipantSkillDto dto);
         Task<PlayerSessionStatsDto?> GetPlayerSessionStatsAsync(int sessionId, string participantType, int participantId);
         Task<IEnumerable<SessionRosterPlayerDto>?> GetSessionRosterAsync(int sessionId, int organizerUserId);

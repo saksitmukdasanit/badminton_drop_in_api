@@ -78,15 +78,16 @@ builder.Services.AddSwaggerGen(options =>
 
         }
     });
-    options.AddServer(new Microsoft.OpenApi.Models.OpenApiServer
-    {
-        Url = "/drop-in-api"
-    });
+    // options.AddServer(new Microsoft.OpenApi.Models.OpenApiServer
+    // {
+    //     Url = "/drop-in-api"
+    // });
 });
 
 
 // ลงทะเบียน SignalR
 builder.Services.AddSignalR();
+builder.Services.AddHttpClient(); // เพิ่มบรรทัดนี้เพื่อใช้งาน HttpClientFactory
 builder.Services.AddControllers();
 
 
@@ -155,7 +156,7 @@ app.UseSwaggerUI();
 // app.UseHttpsRedirection();
 
 // **สำคัญมาก:** บอกให้แอปพลิเคชันรู้ว่าทำงานภายใต้ Path Base นี้
-app.UsePathBase("/drop-in-api");
+// app.UsePathBase("/drop-in-api");
 
 app.UseCors(MyAllowSpecificOrigins);
 

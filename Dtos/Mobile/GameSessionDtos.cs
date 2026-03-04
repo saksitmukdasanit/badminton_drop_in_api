@@ -78,6 +78,10 @@ namespace DropInBadAPI.Dtos
         public decimal? ShuttlecockCostPerUnit { get; set; }
         public int? ShuttlecockModelId { get; set; }
         public int? ShuttlecockBrandId { get; set; }
+        public string? ShuttlecockBrandName { get; set; }
+        public string? ShuttlecockModelName { get; set; }
+        public string? GameTypeName { get; set; }
+        public int CurrentParticipants { get; set; }
         public int? NumberOfCourts { get; set; }
         public string? CourtNumbers { get; set; }
         public string? Notes { get; set; }

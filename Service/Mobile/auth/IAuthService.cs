@@ -8,12 +8,13 @@ namespace DropInBadAPI.Interfaces
 
         Task<(bool Success, string ErrorMessage)> CompleteUserProfileAsync(int userId, CompleteProfileDto dto);
 
-        Task<(string? AccessToken, string? RefreshToken)> LoginUserAsync(LoginDto loginDto);
+        Task<(string? AccessToken, string? RefreshToken, string ErrorMessage)> LoginUserAsync(LoginDto loginDto);
         Task<UserProfileDto?> GetUserProfileAsync(int userId);
         Task<(string? AccessToken, string? RefreshToken)> RefreshTokenAsync(string accessToken, string refreshToken);
         Task<(bool Success, string ErrorMessage)> ChangePasswordAsync(int userId, ChangePasswordDto changePasswordDto);
         Task<(bool Success, string ErrorMessage)> ResetPasswordAsync(ResetPasswordDto dto);
-
+        Task<(bool Success, string Message)> VerifyOtpAsync(string phoneNumber, string otp);
+        Task<(bool Success, string Message)> ResendOtpAsync(string phoneNumber);
 
     }
 }

@@ -264,5 +264,79 @@ namespace DropInBadAPI.Controllers.Mobile
             }
             return Ok(new Response<object> { Status = 200, Message = "Competition ended." });
         }
+
+        [HttpDelete("{sessionId}/participants/{participantType}/{participantId}")]
+        public async Task<ActionResult<Response<object>>> RemoveParticipant(int sessionId, string participantType, int participantId)
+        {
+            var (success, errorMessage) = await _sessionService.RemoveParticipantAsync(sessionId, participantType, participantId, GetCurrentUserId());
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Participant removed successfully." });
+        }
+
+        [HttpPut("{sessionId}/participants/{participantType}/{participantId}/promote")]
+        public async Task<ActionResult<Response<object>>> PromoteParticipant(int sessionId, string participantType, int participantId)
+        {
+            var (success, errorMessage) = await _sessionService.PromoteWaitlistedParticipantAsync(sessionId, participantType, participantId, GetCurrentUserId());
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+
+            return Ok(new Response<object> { Status = 200, Message = "Participant promoted successfully." });
+        }
+
+        [HttpPost("{sessionId}/auto-match")]
+        public async Task<ActionResult<Response<object>>> AutoMatch(int sessionId, [FromBody] AutoMatchRequestDto dto)
+        {
+            var (success, errorMessage) = await _sessionService.AutoMatchAsync(sessionId, GetCurrentUserId(), dto);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Auto match successful." });
+        }
+
+        [HttpPost("{sessionId}/swap-players")]
+        public async Task<ActionResult<Response<object>>> SwapPlayers(int sessionId, [FromBody] SwapPlayersRequestDto dto)
+        {
+            var (success, errorMessage) = await _sessionService.SwapPlayersAsync(sessionId, GetCurrentUserId(), dto);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Players swapped successfully." });
+        }
+
+        [HttpPost("{sessionId}/assign-reserve")]
+        public async Task<ActionResult<Response<object>>> AssignReserve(int sessionId, [FromBody] AssignReserveRequestDto dto)
+        {
+            var (success, errorMessage) = await _sessionService.AssignReserveToCourtAsync(sessionId, GetCurrentUserId(), dto);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Reserve assigned successfully." });
+        }
+
+        [HttpPost("{sessionId}/move-players")]
+        public async Task<ActionResult<Response<object>>> MovePlayers(int sessionId, [FromBody] MovePlayersRequestDto dto)
+        {
+            var (success, errorMessage) = await _sessionService.MovePlayersAsync(sessionId, GetCurrentUserId(), dto);
+
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            }
+            return Ok(new Response<object> { Status = 200, Message = "Players moved successfully." });
+        }
     }
 }

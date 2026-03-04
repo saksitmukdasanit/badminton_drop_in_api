@@ -22,5 +22,11 @@ namespace DropInBadAPI.Service.Mobile.Game
         Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId);
         Task<bool> StartCompetitionAsync(int sessionId, int organizerUserId);
         Task<bool> EndCompetitionAsync(int sessionId, int organizerUserId);
+        Task<(bool Success, string ErrorMessage)> RemoveParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId);
+        Task<(bool Success, string ErrorMessage)> PromoteWaitlistedParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId);
+        Task<(bool Success, string ErrorMessage)> AutoMatchAsync(int sessionId, int organizerUserId, AutoMatchRequestDto dto);
+        Task<(bool Success, string ErrorMessage)> SwapPlayersAsync(int sessionId, int organizerUserId, SwapPlayersRequestDto dto);
+        Task<(bool Success, string ErrorMessage)> AssignReserveToCourtAsync(int sessionId, int organizerUserId, AssignReserveRequestDto dto);
+        Task<(bool Success, string ErrorMessage)> MovePlayersAsync(int sessionId, int organizerUserId, MovePlayersRequestDto dto);
     }
 }

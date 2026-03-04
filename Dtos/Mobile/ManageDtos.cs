@@ -19,6 +19,8 @@ namespace DropInBadAPI.Dtos
         public decimal? ShuttlecockCostPerUnit { get; set; }
         public decimal? CourtFeePerPerson { get; set; }
         public int MaxParticipants { get; set; }
+        public int CurrentParticipants { get; set; }
+        public string? GameTypeName { get; set; } // เพิ่ม GameTypeName
 
         // ข้อมูลอื่นๆ
         public string? Notes { get; set; }
@@ -46,10 +48,12 @@ namespace DropInBadAPI.Dtos
 
         public int Status { get; set; } // สถานะการเข้าร่วม: 1=เข้าร่วม, 2=รอคิว
         public DateTime? CheckinTime { get; set; }
+        public int TotalGamesPlayed { get; set; } // NEW: เพิ่มฟิลด์จำนวนเกมที่เล่น
     }
 
     public record AddGuestDto(
         string GuestName,
+        string? PhoneNumber,
         int Gender,
         int? SkillLevelId
     );
@@ -92,6 +96,8 @@ namespace DropInBadAPI.Dtos
         public int? SkillLevelId { get; set; }
         public string? SkillLevelName { get; set; }
         public string? SkillLevelColor { get; set; }
+        public string? EmergencyContactName { get; set; }
+        public string? EmergencyContactPhone { get; set; }
     }
 
     public class WaitingPlayerDto
@@ -106,6 +112,8 @@ namespace DropInBadAPI.Dtos
         public string? SkillLevelColor { get; set; }
         public DateTime CheckedInTime { get; set; }
         public int TotalGamesPlayed { get; set; }
+        public string? EmergencyContactName { get; set; }
+        public string? EmergencyContactPhone { get; set; }
     }
 
     // ====== DTOs for POST /matches ======
@@ -181,7 +189,16 @@ namespace DropInBadAPI.Dtos
     }
 
     // DTO สำหรับเพิ่ม Walk-in
-    public record AddWalkinDto(string GuestName, int? Gender, int? SkillLevelId);
+    public record AddWalkinDto(string GuestName, string? PhoneNumber, int? Gender, int? SkillLevelId);
+
+    // DTO สำหรับ Autocomplete Suggestion
+    public class GuestSuggestionDto
+    {
+        public string GuestName { get; set; }
+        public string? PhoneNumber { get; set; }
+        public int? Gender { get; set; }
+        public int? SkillLevelId { get; set; }
+    }
 
     // DTO สำหรับอัปเดตระดับมือ
     public record UpdateParticipantSkillDto(int SkillLevelId);
@@ -243,4 +260,31 @@ namespace DropInBadAPI.Dtos
         public string ParticipantType { get; set; }
     }
 
+    // --- NEW: DTO สำหรับ Auto Match ---
+    public class AutoMatchRequestDto
+    {
+        public bool IsMixedMode { get; set; }
+        public List<string> ExcludedPlayerIds { get; set; } = new(); // ID ของคนที่ Pause/End เช่น ["Member_1", "Guest_5"]
+    }
+
+    // --- NEW: DTO สำหรับสลับตัวผู้เล่น ---
+    public class SwapPlayersRequestDto
+    {
+        public PlayerSelectionDto Player1 { get; set; }
+        public PlayerSelectionDto Player2 { get; set; }
+    }
+
+    // --- NEW: DTO สำหรับดึงตัวสำรองลงสนาม ---
+    public class AssignReserveRequestDto
+    {
+        public string TargetCourtIdentifier { get; set; } // สนามที่จะเอาลง
+        public bool IsQueueMode { get; set; } // true = ตามคิว, false = ตามเลขสนาม
+    }
+
+    // --- NEW: DTO สำหรับย้ายผู้เล่น (Move Players) ---
+    public class MovePlayersRequestDto
+    {
+        public List<PlayerSelectionDto> Players { get; set; } = new();
+        public string TargetCourtIdentifier { get; set; } // เป้าหมาย (เลขสนาม หรือ รหัสทีมสำรอง)
+    }
 }

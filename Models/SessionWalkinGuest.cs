@@ -11,6 +11,8 @@ public partial class SessionWalkinGuest
 
     public string GuestName { get; set; } = null!;
 
+    public string? PhoneNumber { get; set; }
+
     public short? Gender { get; set; }
 
     public int? SkillLevelId { get; set; }

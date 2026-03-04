@@ -373,6 +373,7 @@ public partial class BadmintonDbContext : DbContext
             entity.Property(e => e.AmountPaid).HasPrecision(10, 2);
             entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
             entity.Property(e => e.GuestName).HasMaxLength(150);
+            entity.Property(e => e.PhoneNumber).HasMaxLength(20);
             entity.Property(e => e.SessionId).HasColumnName("SessionID");
             entity.Property(e => e.SkillLevelId).HasColumnName("SkillLevelID");
             entity.Property(e => e.Status).HasDefaultValue((short)1);

@@ -74,13 +74,15 @@ namespace DropInBadAPI.Services
                         var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
                         return new PlayerInMatchDto
                         {
-                            UserId = p.UserId,
+                            UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไปเพื่อให้ ID ตรงกับตอน Waiting
                             WalkinId = p.WalkinId,
                             Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
                             GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                             SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
                             SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode
+                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
+                            EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                            EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                         };
                     }).ToList(),
                     TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p =>
@@ -88,13 +90,15 @@ namespace DropInBadAPI.Services
                         var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
                         return new PlayerInMatchDto
                         {
-                            UserId = p.UserId,
+                            UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
                             WalkinId = p.WalkinId,
                             Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
                             GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                             SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
                             SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode
+                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
+                            EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                            EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                         };
                     }).ToList()
                 });
@@ -118,14 +122,16 @@ namespace DropInBadAPI.Services
                 var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
                 return new PlayerInMatchDto
                 {
-                    UserId = p.UserId,
+                    UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
                     WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
                     ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                     GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                     SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
                     SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                    SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode
+                    SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
+                    EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                    EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                 };
             };
 
@@ -291,7 +297,7 @@ namespace DropInBadAPI.Services
 
             // 3. ดึง UserId จาก ParticipantId สำหรับผู้เล่นที่เป็น Member
             var memberParticipantIds = dto.TeamA.Concat(dto.TeamB)
-                .Where(p => p.Type == "Member")
+                .Where(p => string.Equals(p.Type, "Member", StringComparison.OrdinalIgnoreCase))
                 .Select(p => p.Id)
                 .ToList();
 
@@ -303,14 +309,14 @@ namespace DropInBadAPI.Services
             var matchPlayers = new List<MatchPlayer>();
             foreach (var p in dto.TeamA)
             {
-                int? userId = p.Type == "Member" && memberUserIdMap.ContainsKey(p.Id) ? memberUserIdMap[p.Id] : null;
-                int? walkinId = p.Type == "Guest" ? p.Id : null;
+                int? userId = string.Equals(p.Type, "Member", StringComparison.OrdinalIgnoreCase) && memberUserIdMap.ContainsKey(p.Id) ? memberUserIdMap[p.Id] : null;
+                int? walkinId = string.Equals(p.Type, "Guest", StringComparison.OrdinalIgnoreCase) ? p.Id : null;
                 matchPlayers.Add(new MatchPlayer { MatchId = match.MatchId, Team = "A", UserId = userId, WalkinId = walkinId });
             }
             foreach (var p in dto.TeamB)
             {
-                int? userId = p.Type == "Member" && memberUserIdMap.ContainsKey(p.Id) ? memberUserIdMap[p.Id] : null;
-                int? walkinId = p.Type == "Guest" ? p.Id : null;
+                int? userId = string.Equals(p.Type, "Member", StringComparison.OrdinalIgnoreCase) && memberUserIdMap.ContainsKey(p.Id) ? memberUserIdMap[p.Id] : null;
+                int? walkinId = string.Equals(p.Type, "Guest", StringComparison.OrdinalIgnoreCase) ? p.Id : null;
                 matchPlayers.Add(new MatchPlayer { MatchId = match.MatchId, Team = "B", UserId = userId, WalkinId = walkinId });
             }
 
@@ -332,12 +338,14 @@ namespace DropInBadAPI.Services
                     var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
                     return new PlayerInMatchDto
                     {
-                        UserId = p.UserId,
+                        UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
                         Nickname = p.User?.UserProfile?.Nickname ?? "N/A",
                         GenderName = p.User?.UserProfile?.Gender == 1 ? "ชาย" : p.User?.UserProfile?.Gender == 2 ? "หญิง" : "อื่นๆ",
                         SkillLevelId = sessionParticipant?.SkillLevelId,
                         SkillLevelName = sessionParticipant?.SkillLevel?.LevelName,
-                        SkillLevelColor = sessionParticipant?.SkillLevel?.ColorHexCode
+                        SkillLevelColor = sessionParticipant?.SkillLevel?.ColorHexCode,
+                        EmergencyContactName = p.User?.UserProfile?.EmergencyContactName,
+                        EmergencyContactPhone = p.User?.UserProfile?.EmergencyContactPhone
                     };
                 }
                 else // WalkinId.HasValue
@@ -705,15 +713,46 @@ namespace DropInBadAPI.Services
             return (false, "Invalid check-in data provided.");
         }
 
-        public async Task<WaitingPlayerDto> AddWalkinGuestAsync(int sessionId, AddWalkinDto dto)
+        // ฟังก์ชันค้นหาประวัติแขกเดิม (Autocomplete)
+        public async Task<List<GuestSuggestionDto>> SearchPreviousGuestsAsync(int organizerUserId, string? query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return new List<GuestSuggestionDto>();
+
+            var term = query.Trim().ToLower();
+
+            // ค้นหาจากประวัติ Walk-in ของ Organizer คนนี้ โดยดูจาก Session ที่เขาเป็นคนสร้าง
+            var guests = await _context.SessionWalkinGuests
+                .AsNoTracking() // เพิ่ม AsNoTracking เพื่อประสิทธิภาพ
+                .Include(g => g.Session)
+                // FIX: เปลี่ยนกลับมาใช้ Contains + ToLower ซึ่งเสถียรกว่า Like ในหลาย Database
+                .Where(g => (g.Session.CreatedByUserId == organizerUserId || g.CreatedBy == organizerUserId) && 
+                            (g.GuestName.Contains(term) || 
+                             (g.PhoneNumber != null && g.PhoneNumber.Contains(term))))
+                .OrderByDescending(g => g.CreatedDate) // เอาล่าสุดขึ้นก่อน
+                .Select(g => new GuestSuggestionDto
+                {
+                    GuestName = g.GuestName,
+                    PhoneNumber = g.PhoneNumber,
+                    Gender = g.Gender != null ? (int)g.Gender : 1,
+                    SkillLevelId = g.SkillLevelId
+                })
+                .ToListAsync();
+
+            // Group by ชื่อ เพื่อไม่ให้ซ้ำ และเอาข้อมูลล่าสุด
+            return guests.GroupBy(g => g.GuestName).Select(g => g.First()).Take(10).ToList();
+        }
+
+        public async Task<WaitingPlayerDto> AddWalkinGuestAsync(int sessionId, int organizerUserId, AddWalkinDto dto)
         {
             var newGuest = new SessionWalkinGuest
             {
                 SessionId = sessionId,
                 GuestName = dto.GuestName,
+                PhoneNumber = dto.PhoneNumber, 
                 Gender = (short?)dto.Gender,
                 SkillLevelId = dto.SkillLevelId,
                 Status = 1,
+                CreatedBy = organizerUserId, // FIX: บันทึกคนสร้าง เพื่อให้ค้นหาเจอในอนาคต
                 CheckinTime = DateTime.UtcNow,
                 CreatedDate = DateTime.UtcNow
             };
@@ -789,6 +828,7 @@ namespace DropInBadAPI.Services
 
             var playedMatches = await _context.Matches
                 .Where(m => m.SessionId == sessionId &&
+                            (m.Status == 1 || m.Status == 2) && // FIX: เอาเฉพาะเกมที่กำลังเล่นหรือจบแล้ว (ไม่เอา Cancelled/Staged)
                             m.MatchPlayers.Any(mp => (targetUserId.HasValue && mp.UserId == targetUserId) ||
                                                      (targetWalkinId.HasValue && mp.WalkinId == targetWalkinId)
                                                ))
@@ -806,6 +846,8 @@ namespace DropInBadAPI.Services
             };
 
             int totalMinutesPlayed = 0;
+            int finishedGamesCount = 0; // NEW: ตัวนับเกมที่จบจริง
+
             foreach (var match in playedMatches)
             {
                 var targetPlayerInMatch = match.MatchPlayers
@@ -842,6 +884,7 @@ namespace DropInBadAPI.Services
                 if (match.Status == 2 && match.EndTime.HasValue && match.StartTime.HasValue)
                 {
                     historyItem.DurationMinutes = (int)(match.EndTime.Value - match.StartTime.Value).TotalMinutes;
+                    finishedGamesCount++; // FIX: นับเฉพาะเกมที่จบแล้ว
                     totalMinutesPlayed += historyItem.DurationMinutes;
 
                     historyItem.Result = targetPlayerInMatch.Result switch
@@ -859,7 +902,7 @@ namespace DropInBadAPI.Services
                 stats.MatchHistory.Add(historyItem);
             }
 
-            stats.TotalGamesPlayed = stats.MatchHistory.Count;
+            stats.TotalGamesPlayed = finishedGamesCount; // FIX: ใช้ค่าที่นับจากเกมที่จบแล้วเท่านั้น
             stats.TotalMinutesPlayed = FormatTotalMinutes(totalMinutesPlayed);
             return stats;
         }
@@ -1046,7 +1089,7 @@ namespace DropInBadAPI.Services
             // if (isPlayerInAnotherStagedMatch) return null; // ผู้เล่นอยู่ในสนามอื่นแล้ว
 
             var allMemberIds = validTeamA.Concat(validTeamB)
-                .Where(p => p.Type == "Member")
+                .Where(p => string.Equals(p.Type, "Member", StringComparison.OrdinalIgnoreCase))
                 .Select(p => p.Id)
                 .Distinct()
                 .ToList();
@@ -1066,11 +1109,11 @@ namespace DropInBadAPI.Services
                     int? userId = null;
                     int? walkinId = null;
 
-                    if (p.Type == "Member" && memberUserIdMap.ContainsKey(p.Id))
+                    if (string.Equals(p.Type, "Member", StringComparison.OrdinalIgnoreCase) && memberUserIdMap.ContainsKey(p.Id))
                     {
                         userId = memberUserIdMap[p.Id];
                     }
-                    else if (p.Type == "Guest")
+                    else if (string.Equals(p.Type, "Guest", StringComparison.OrdinalIgnoreCase))
                     {
                         walkinId = p.Id;
                     }
@@ -1102,6 +1145,7 @@ namespace DropInBadAPI.Services
             var createdMatchPlayers = await _context.MatchPlayers
                 .Where(mp => mp.MatchId == match.MatchId)
                 .Include(mp => mp.User.UserProfile)
+                .Include(mp => mp.User.SessionParticipants.Where(sp => sp.SessionId == sessionId)) // FIX: Include SessionParticipants เพื่อดึง ID
                 .Include(mp => mp.Walkin)
                 .ToListAsync();
 
@@ -1111,17 +1155,21 @@ namespace DropInBadAPI.Services
                 CourtNumber = match.CourtNumber,
                 TeamA = createdMatchPlayers.Where(p => p.Team == "A").Select(p => new PlayerInMatchDto
                 {
-                    UserId = p.UserId,
+                    UserId = p.User?.SessionParticipants.FirstOrDefault()?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
-                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null
+                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
+                    EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                    EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                 }).ToList(),
                 TeamB = createdMatchPlayers.Where(p => p.Team == "B").Select(p => new PlayerInMatchDto
                 {
-                    UserId = p.UserId,
+                    UserId = p.User?.SessionParticipants.FirstOrDefault()?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
-                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null
+                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
+                    EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                    EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                 }).ToList()
             };
 
@@ -1136,6 +1184,7 @@ namespace DropInBadAPI.Services
             var match = await _context.Matches
                 .Include(m => m.Session)
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.SessionParticipants) // FIX: Include SessionParticipants
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
                 .FirstOrDefaultAsync(m => m.MatchId == matchId);
 
@@ -1172,8 +1221,22 @@ namespace DropInBadAPI.Services
                 MatchId = match.MatchId,
                 CourtNumber = match.CourtNumber,
                 StartTime = match.StartTime.Value,
-                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(p => new PlayerInMatchDto { UserId = p.UserId, WalkinId = p.WalkinId, Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName }).ToList(),
-                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p => new PlayerInMatchDto { UserId = p.UserId, WalkinId = p.WalkinId, Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName }).ToList()
+                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(p => new PlayerInMatchDto 
+                { 
+                    UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
+                    WalkinId = p.WalkinId, 
+                    Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    EmergencyContactName = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactName : null,
+                    EmergencyContactPhone = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactPhone : null
+                }).ToList(),
+                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p => new PlayerInMatchDto 
+                { 
+                    UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
+                    WalkinId = p.WalkinId, 
+                    Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    EmergencyContactName = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactName : null,
+                    EmergencyContactPhone = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactPhone : null
+                }).ToList()
             };
 
             // Broadcast state change
