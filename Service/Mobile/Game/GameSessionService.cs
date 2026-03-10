@@ -648,6 +648,14 @@ namespace DropInBadAPI.Service.Mobile.Game
                 return (null, "You are already registered for this session.");
             }
 
+            // --- NEW LOGIC: Look up the member's saved skill level for this organizer ---
+            int organizerUserId = session.CreatedByUserId;
+            int? savedSkillLevelId = await _context.UserOrganizerSkills
+                .Where(uos => uos.OrganizerUserId == organizerUserId && uos.UserId == userId)
+                .Select(uos => (int?)uos.SkillLevelId)
+                .FirstOrDefaultAsync();
+
+
             int newStatus;
             string statusMessage;
 
@@ -675,6 +683,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             {
                 existingParticipant.Status = (byte)newStatus;
                 existingParticipant.JoinedDate = DateTime.UtcNow;
+                existingParticipant.SkillLevelId = savedSkillLevelId; // Apply saved skill level
                 newParticipantEntry = existingParticipant;
             }
             else // กรณีจองครั้งแรก
@@ -684,7 +693,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                     SessionId = sessionId,
                     UserId = userId,
                     Status = (byte)newStatus,
-                    JoinedDate = DateTime.UtcNow
+                    JoinedDate = DateTime.UtcNow,
+                    SkillLevelId = savedSkillLevelId // Apply saved skill level
                 };
                 await _context.SessionParticipants.AddAsync(newParticipantEntry);
             }
@@ -826,6 +836,7 @@ namespace DropInBadAPI.Service.Mobile.Game
         .Include(s => s.CreatedByUser.UserProfile)
         .Include(s => s.SessionParticipants) // Include ไว้เพื่อนับจำนวน
         .Include(s => s.SessionWalkinGuests) // Include ไว้เพื่อนับจำนวน
+        .Include(s => s.ParticipantBills) // NEW: Include Bills เพื่อคำนวณยอดจ่าย
         .Include(s => s.GameType)
         .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
         .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
@@ -860,6 +871,12 @@ namespace DropInBadAPI.Service.Mobile.Game
             Status = s.Status,
             CourtNumbers = s.CourtNumbers,
             Notes = s.Notes,
+
+            // --- NEW: คำนวณรายได้ (ต้องเพิ่ม Property ใน DTO ก่อน) ---
+            // PaidAmount = ยอดรวมบิลที่จ่ายแล้ว (Status = 2)
+            PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount),
+            // TotalIncome = (จำนวนคน * ราคาต่อคน)
+            TotalIncome = (s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1)) * ((s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0)),
 
             Facilities = new List<FacilityDto>(),
             Participants = new List<ParticipantDto>()

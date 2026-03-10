@@ -258,6 +258,7 @@ namespace DropInBadAPI.Dtos
         public bool IsCheckedIn { get; set; }
         public int ParticipantId { get; set; }
         public string ParticipantType { get; set; }
+        public int Status { get; set; } // NEW: เพิ่มสถานะ (1=Joined, 2=Waitlisted)
     }
 
     // --- NEW: DTO สำหรับ Auto Match ---

@@ -777,17 +777,68 @@ namespace DropInBadAPI.Services
 
         public async Task<bool> UpdateParticipantSkillAsync(string participantType, int participantId, UpdateParticipantSkillDto dto)
         {
+            int sessionId = 0;
+            int organizerUserId = 0;
+
             if (participantType.Equals("member", StringComparison.OrdinalIgnoreCase))
             {
-                var participant = await _context.SessionParticipants.FindAsync(participantId);
+                // 1. Find the session participant to get session and user info
+                var participant = await _context.SessionParticipants
+                    .Include(p => p.Session) // Need session to get OrganizerId
+                    .FirstOrDefaultAsync(p => p.ParticipantId == participantId);
+
                 if (participant == null) return false;
+                
+                sessionId = participant.SessionId;
+                organizerUserId = participant.Session.CreatedByUserId;
+
+                // 2. Update the skill for the current session (as before)
                 participant.SkillLevelId = dto.SkillLevelId;
+
+                // --- NEW LOGIC: Save the skill level for the member globally for this organizer ---
+                int memberUserId = participant.UserId;
+
+                // Find if a skill record already exists for this member with this organizer
+                var memberSkill = await _context.UserOrganizerSkills
+                    .FirstOrDefaultAsync(uos => uos.OrganizerUserId == organizerUserId && uos.UserId == memberUserId);
+
+                if (memberSkill != null)
+                {
+                    // Update existing record
+                    if (dto.SkillLevelId > 0)
+                    {
+                        memberSkill.SkillLevelId = dto.SkillLevelId;
+                        memberSkill.UpdatedDate = DateTime.UtcNow;
+                        memberSkill.UpdatedBy = organizerUserId;
+                    }
+                }
+                else if (dto.SkillLevelId > 0) // Only create if a skill is actually set
+                {
+                    // Create new record
+                    var newMemberSkill = new UserOrganizerSkill
+                    {
+                        OrganizerUserId = organizerUserId,
+                        UserId = memberUserId,
+                        SkillLevelId = dto.SkillLevelId,
+                        UpdatedDate = DateTime.UtcNow,
+                        UpdatedBy = organizerUserId
+                    };
+                    await _context.UserOrganizerSkills.AddAsync(newMemberSkill);
+                }
             }
             else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
             {
-                var guest = await _context.SessionWalkinGuests.FindAsync(participantId);
+                var guest = await _context.SessionWalkinGuests
+                    .Include(g => g.Session) // FIX: Include Session เพื่อเอา ID ไป Broadcast
+                    .FirstOrDefaultAsync(g => g.WalkinId == participantId);
+
                 if (guest == null) return false;
-                guest.SkillLevelId = dto.SkillLevelId;
+
+                sessionId = guest.SessionId;
+                organizerUserId = guest.Session.CreatedByUserId;
+
+                // ถ้าส่งมาเป็น 0 หรือน้อยกว่า ให้ถือว่าเป็น null (เคลียร์ค่า)
+                guest.SkillLevelId = dto.SkillLevelId > 0 ? dto.SkillLevelId : null;
             }
             else
             {
@@ -795,6 +846,13 @@ namespace DropInBadAPI.Services
             }
 
             await _context.SaveChangesAsync();
+
+            // --- NEW: Broadcast การเปลี่ยนแปลงเพื่อให้หน้าจออัปเดตทันที ---
+            if (sessionId > 0)
+            {
+                await BroadcastLiveStateChange(sessionId, organizerUserId);
+            }
+
             return true;
         }
 
@@ -949,7 +1007,8 @@ namespace DropInBadAPI.Services
                     SkillLevelId = p.SkillLevelId,
                     SkillLevelName = p.SkillLevel.LevelName,
                     SkillLevelColor = p.SkillLevel.ColorHexCode,
-                    IsCheckedIn = p.CheckinTime != null
+                    IsCheckedIn = p.CheckinTime != null,
+                    Status = p.Status ?? 1 // NEW: Map status
                 })
                 .ToListAsync();
 
@@ -969,7 +1028,8 @@ namespace DropInBadAPI.Services
                     SkillLevelId = g.SkillLevelId,
                     SkillLevelName = g.SkillLevel.LevelName,
                     SkillLevelColor = g.SkillLevel.ColorHexCode,
-                    IsCheckedIn = g.CheckinTime != null
+                    IsCheckedIn = g.CheckinTime != null,
+                    Status = g.Status ?? 1 // NEW: Map status
                 })
                 .ToListAsync();
 
@@ -1145,8 +1205,9 @@ namespace DropInBadAPI.Services
             var createdMatchPlayers = await _context.MatchPlayers
                 .Where(mp => mp.MatchId == match.MatchId)
                 .Include(mp => mp.User.UserProfile)
-                .Include(mp => mp.User.SessionParticipants.Where(sp => sp.SessionId == sessionId)) // FIX: Include SessionParticipants เพื่อดึง ID
+                .Include(mp => mp.User.SessionParticipants.Where(sp => sp.SessionId == sessionId)).ThenInclude(sp => sp.SkillLevel) // FIX: Include SkillLevel
                 .Include(mp => mp.Walkin)
+                .Include(mp => mp.Walkin.SkillLevel) // FIX: Include Walkin SkillLevel
                 .ToListAsync();
 
             var stagedMatchDto = new StagedMatchDto
@@ -1159,6 +1220,10 @@ namespace DropInBadAPI.Services
                     WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
                     ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
+                    GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
+                    SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevelId : p.Walkin?.SkillLevelId,
+                    SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
+                    SkillLevelColor = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
                     EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
                     EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                 }).ToList(),
@@ -1168,6 +1233,10 @@ namespace DropInBadAPI.Services
                     WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
                     ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
+                    GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
+                    SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevelId : p.Walkin?.SkillLevelId,
+                    SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
+                    SkillLevelColor = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault()?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
                     EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
                     EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
                 }).ToList()
@@ -1184,8 +1253,9 @@ namespace DropInBadAPI.Services
             var match = await _context.Matches
                 .Include(m => m.Session)
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
-                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.SessionParticipants) // FIX: Include SessionParticipants
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.SessionParticipants).ThenInclude(sp => sp.SkillLevel) // FIX: Include SkillLevel
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin.SkillLevel) // FIX: Include Walkin SkillLevel
                 .FirstOrDefaultAsync(m => m.MatchId == matchId);
 
             if (match == null || match.Session.CreatedByUserId != organizerUserId || match.Status != 4)
@@ -1226,6 +1296,10 @@ namespace DropInBadAPI.Services
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId, 
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
+                    SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevelId : p.Walkin?.SkillLevelId,
+                    SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
+                    SkillLevelColor = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
                     EmergencyContactName = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactName : null,
                     EmergencyContactPhone = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactPhone : null
                 }).ToList(),
@@ -1234,6 +1308,10 @@ namespace DropInBadAPI.Services
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId, 
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
+                    SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevelId : p.Walkin?.SkillLevelId,
+                    SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
+                    SkillLevelColor = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
                     EmergencyContactName = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactName : null,
                     EmergencyContactPhone = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactPhone : null
                 }).ToList()

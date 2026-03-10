@@ -169,6 +169,8 @@ namespace DropInBadAPI.Dtos
 
         public List<FacilityDto> Facilities { get; set; } = new();
         public List<ParticipantDto> Participants { get; set; } = new();
+        public decimal PaidAmount { get; set; }
+        public decimal TotalIncome { get; set; }
     }
 
     public record JoinSessionResponseDto

@@ -36,6 +36,8 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<OrganizerProfile> OrganizerProfiles { get; set; }
 
+    public virtual DbSet<UserOrganizerSkill> UserOrganizerSkills { get; set; }
+
     public virtual DbSet<OrganizerSkillLevel> OrganizerSkillLevels { get; set; }
 
     public virtual DbSet<PairingMethod> PairingMethods { get; set; }
@@ -77,6 +79,8 @@ public partial class BadmintonDbContext : DbContext
         {
             entity.HasKey(e => e.LineItemId).HasName("BillLineItems_pkey");
 
+            entity.HasIndex(e => e.BillId, "IX_BillLineItems_BillID");
+
             entity.Property(e => e.LineItemId).HasColumnName("LineItemID");
             entity.Property(e => e.Amount).HasPrecision(10, 2);
             entity.Property(e => e.BillId).HasColumnName("BillID");
@@ -104,6 +108,8 @@ public partial class BadmintonDbContext : DbContext
             entity.HasKey(e => e.SessionId).HasName("GameSessions_pkey");
 
             entity.HasIndex(e => e.SessionPublicId, "GameSessions_SessionPublicId_key").IsUnique();
+            entity.HasIndex(e => e.VenueId, "IX_GameSessions_VenueID");
+            entity.HasIndex(e => e.SessionDate, "IX_GameSessions_Date");
 
             entity.Property(e => e.SessionId).HasColumnName("SessionID");
             entity.Property(e => e.CourtFeePerPerson).HasPrecision(10, 2);
@@ -195,6 +201,8 @@ public partial class BadmintonDbContext : DbContext
         {
             entity.HasKey(e => e.MatchId).HasName("Matches_pkey");
 
+            entity.HasIndex(e => e.SessionId, "IX_Matches_SessionID");
+
             entity.Property(e => e.MatchId).HasColumnName("MatchID");
             entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
             entity.Property(e => e.SessionId).HasColumnName("SessionID");
@@ -235,6 +243,8 @@ public partial class BadmintonDbContext : DbContext
         {
             entity.HasKey(e => e.UserId).HasName("OrganizerProfiles_pkey");
 
+            entity.HasIndex(e => e.BankId, "IX_OrganizerProfiles_BankID");
+
             entity.Property(e => e.UserId)
                 .ValueGeneratedNever()
                 .HasColumnName("UserID");
@@ -271,9 +281,39 @@ public partial class BadmintonDbContext : DbContext
                 .HasConstraintName("FK_OrganizerProfiles_UserID");
         });
 
+        modelBuilder.Entity<UserOrganizerSkill>(entity =>
+        {
+            entity.HasKey(e => new { e.UserId, e.OrganizerUserId }).HasName("UserOrganizerSkills_pkey");
+
+            entity.ToTable("UserOrganizerSkills");
+
+            entity.Property(e => e.UserId).HasColumnName("UserID");
+            entity.Property(e => e.OrganizerUserId).HasColumnName("OrganizerUserID");
+            entity.Property(e => e.SkillLevelId).HasColumnName("SkillLevelID");
+            entity.Property(e => e.UpdatedDate).HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.UpdatedBy).HasColumnName("UpdatedBy");
+
+            entity.HasOne(d => d.User).WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_User_Skill");
+
+            entity.HasOne(d => d.OrganizerUser).WithMany()
+                .HasForeignKey(d => d.OrganizerUserId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_Organizer_Skill");
+
+            entity.HasOne(d => d.SkillLevel).WithMany()
+                .HasForeignKey(d => d.SkillLevelId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_SkillLevel_Master");
+        });
+
         modelBuilder.Entity<OrganizerSkillLevel>(entity =>
         {
             entity.HasKey(e => e.SkillLevelId).HasName("OrganizerSkillLevels_pkey");
+
+            entity.HasIndex(e => e.OrganizerUserId, "IX_OrganizerSkillLevels_Organizer");
 
             entity.Property(e => e.SkillLevelId).HasColumnName("SkillLevelID");
             entity.Property(e => e.ColorHexCode).HasMaxLength(7);
@@ -302,6 +342,8 @@ public partial class BadmintonDbContext : DbContext
         {
             entity.HasKey(e => e.BillId).HasName("ParticipantBills_pkey");
 
+            entity.HasIndex(e => e.SessionId, "IX_ParticipantBills_SessionID");
+
             entity.Property(e => e.BillId).HasColumnName("BillID");
             entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
             entity.Property(e => e.SessionId).HasColumnName("SessionID");
@@ -327,6 +369,8 @@ public partial class BadmintonDbContext : DbContext
         {
             entity.HasKey(e => e.PaymentId).HasName("Payments_pkey");
 
+            entity.HasIndex(e => e.BillId, "IX_Payments_BillID");
+
             entity.Property(e => e.PaymentId).HasColumnName("PaymentID");
             entity.Property(e => e.Amount).HasPrecision(10, 2);
             entity.Property(e => e.BillId).HasColumnName("BillID");
@@ -342,6 +386,9 @@ public partial class BadmintonDbContext : DbContext
         modelBuilder.Entity<SessionParticipant>(entity =>
         {
             entity.HasKey(e => e.ParticipantId).HasName("SessionParticipants_pkey");
+
+            entity.HasIndex(e => e.SessionId, "IX_SessionParticipants_SessionID");
+            entity.HasIndex(e => e.UserId, "IX_SessionParticipants_UserID");
 
             entity.Property(e => e.ParticipantId).HasColumnName("ParticipantID");
             entity.Property(e => e.JoinedDate).HasDefaultValueSql("now()");
@@ -401,6 +448,8 @@ public partial class BadmintonDbContext : DbContext
         modelBuilder.Entity<ShuttlecockModel>(entity =>
         {
             entity.HasKey(e => e.ModelId).HasName("ShuttlecockModels_pkey");
+
+            entity.HasIndex(e => e.BrandId, "IX_ShuttlecockModels_BrandID");
 
             entity.Property(e => e.ModelId).HasColumnName("ModelID");
             entity.Property(e => e.BrandId).HasColumnName("BrandID");
