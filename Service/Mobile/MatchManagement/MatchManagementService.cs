@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using DropInBadAPI.Data;
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Hubs;
@@ -14,14 +15,17 @@ namespace DropInBadAPI.Services
         private readonly BadmintonDbContext _context;
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IServiceProvider _serviceProvider;
+        private readonly IConfiguration _configuration;
 
         public MatchManagementService(
             BadmintonDbContext context, 
             IHubContext<ManagementGameHub> hubContext,
-            IServiceProvider serviceProvider) {
+            IServiceProvider serviceProvider,
+            IConfiguration configuration) {
             _context = context;
             _hubContext = hubContext;
             _serviceProvider = serviceProvider;
+            _configuration = configuration;
         }
 
         public async Task<LiveSessionStateDto?> GetLiveStateAsync(int sessionId, int organizerUserId)
@@ -534,8 +538,8 @@ namespace DropInBadAPI.Services
                             totalAmount += amount;
                         }
 
-                        // เพิ่มค่าธรรมเนียม 10 บาท (Service Fee)
-                        decimal serviceFee = 10;
+                        // เพิ่มค่าธรรมเนียม (Service Fee)
+                        decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
                         lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
                         totalAmount += serviceFee;
 

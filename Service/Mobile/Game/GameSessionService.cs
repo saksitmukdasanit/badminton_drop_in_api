@@ -6,6 +6,7 @@ using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace DropInBadAPI.Service.Mobile.Game
 {
@@ -14,12 +15,14 @@ namespace DropInBadAPI.Service.Mobile.Game
         private readonly BadmintonDbContext _context;
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IMatchManagementService _matchManagementService;
+        private readonly IConfiguration _configuration;
 
-        public GameSessionService(BadmintonDbContext context, IHubContext<ManagementGameHub> hubContext, IMatchManagementService matchManagementService)
+        public GameSessionService(BadmintonDbContext context, IHubContext<ManagementGameHub> hubContext, IMatchManagementService matchManagementService, IConfiguration configuration)
         {
             _context = context;
             _hubContext = hubContext;
             _matchManagementService = matchManagementService;
+            _configuration = configuration;
         }
 
         public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto)
@@ -1156,6 +1159,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             decimal sumAdditions = 0;
             decimal sumSubtractions = 0;
 
+            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+
             var participantDtos = new List<ParticipantFinancialDto>();
 
             // Helper ใหม่: คำนวณยอดเงินรายคนและแยกส่วนประกอบ
@@ -1186,7 +1191,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 else
                 {
                     // ถ้ายังไม่จ่าย ให้ใช้ยอดคำนวณมาตรฐาน (+10 ค่าบริการ)
-                    totalVal = cPart + sPart + 10; 
+                    totalVal = cPart + sPart + serviceFee; 
                 }
 
                 return (paidVal, totalVal, cPart, sPart);
@@ -1212,7 +1217,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 sumUnpaidShuttle += sUnpaid;
 
                 // Additions/Subtractions (ส่วนต่างจากค่ามาตรฐาน)
-                decimal standardTotal = courtFee + shuttleFee + 10; // +10 Service Fee
+                decimal standardTotal = courtFee + shuttleFee + serviceFee; // +Service Fee
                 decimal diff = totalCost - standardTotal;
                 // หมายเหตุ: Logic นี้เป็นการประมาณการคร่าวๆ จากยอดรวม
                 if (diff > 0.1m) sumAdditions += diff;
