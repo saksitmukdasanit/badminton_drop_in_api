@@ -57,18 +57,6 @@ namespace DropInBadAPI.Controllers.Mobile
             return Ok(new Response<object> { Status = 200, Message = "Match ended successfully." });
         }
 
-
-        [HttpPut("matches/{matchId}/my-result")]
-        public async Task<ActionResult<Response<object>>> SubmitMyResult(int matchId, [FromBody] SubmitResultDto dto)
-        {
-            var success = await _matchService.SubmitPlayerResultAsync(matchId, GetCurrentUserId(), dto);
-            if (!success)
-            {
-                return NotFound(new Response<object> { Status = 404, Message = "Match or player not found." });
-            }
-            return Ok(new Response<object> { Status = 200, Message = "Result submitted successfully." });
-        }
-        
         // --- NEW: API สำหรับดูยอด (Preview) ---
         [HttpGet("participants/{participantType}/{participantId}/bill-preview")]
         public async Task<ActionResult<Response<BillSummaryDto>>> GetBillPreview(string participantType, int participantId)

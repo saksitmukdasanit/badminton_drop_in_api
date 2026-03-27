@@ -16,25 +16,6 @@ namespace DropInBadAPI.Controllers.Mobile
         public GameSessionsController(IGameSessionService sessionService) { _sessionService = sessionService; }
         private int GetCurrentUserId() => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-        // GET: api/GameSessions/upcoming
-        [HttpGet("upcoming")]
-        [AllowAnonymous]
-        public async Task<ActionResult<Response<IEnumerable<GameSessionSummaryDto>>>> GetUpcomingSessions()
-        {
-            var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) != null
-             ? int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
-             : (int?)null;
-
-            var sessions = await _sessionService.GetUpcomingSessionsAsync(currentUserId);
-            var response = new Response<IEnumerable<UpcomingSessionCardDto>>
-            {
-                Status = 200,
-                Message = "Upcoming sessions retrieved successfully.",
-                Data = sessions
-            };
-            return Ok(response);
-        }
-
         // GET: api/GameSessions/my-history
         [HttpGet("my-history")]
         public async Task<ActionResult<Response<IEnumerable<OrganizerGameSessionDto>>>> GetMyHistory()
@@ -150,33 +131,6 @@ namespace DropInBadAPI.Controllers.Mobile
             return Ok(new Response<object> { Status = 200, Message = "Session has been cancelled by the organizer." });
         }
 
-
-        [HttpPost("{id}/join")]
-        public async Task<ActionResult<Response<JoinSessionResponseDto>>> JoinSession(int id)
-        {
-            var (data, errorMessage) = await _sessionService.JoinSessionAsync(id, GetCurrentUserId());
-
-            if (data == null)
-            {
-                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
-            }
-
-            return Ok(new Response<JoinSessionResponseDto> { Status = 200, Message = data.StatusMessage, Data = data });
-        }
-
-        // DELETE: api/GameSessions/5/cancel
-        [HttpDelete("{id}/cancel")]
-        public async Task<ActionResult<Response<object>>> CancelBooking(int id)
-        {
-            var (success, errorMessage) = await _sessionService.CancelBookingAsync(id, GetCurrentUserId());
-
-            if (!success)
-            {
-                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
-            }
-
-            return Ok(new Response<object> { Status = 200, Message = "Your booking has been cancelled." });
-        }
 
         [HttpPost("{id}/add-guest")]
         public async Task<ActionResult<Response<ParticipantDto>>> AddGuestToSession(int id, [FromBody] AddGuestDto dto)

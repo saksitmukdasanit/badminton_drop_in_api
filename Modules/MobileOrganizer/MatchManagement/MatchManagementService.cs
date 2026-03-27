@@ -405,22 +405,6 @@ namespace DropInBadAPI.Services
             return true;
         }
 
-        public async Task<bool> SubmitPlayerResultAsync(int matchId, int userId, SubmitResultDto dto)
-        {
-            var matchPlayer = await _context.MatchPlayers
-                .FirstOrDefaultAsync(mp => mp.MatchId == matchId && mp.UserId == userId);
-
-            if (matchPlayer == null) return false;
-
-            matchPlayer.Result = (byte)dto.Result;
-            matchPlayer.Notes = dto.Notes;
-            matchPlayer.UpdatedBy = userId;
-            matchPlayer.UpdatedDate = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            return true;
-        }
-
         // --- NEW: ฟังก์ชันสำหรับดูยอด (เรียกใช้ Logic คำนวณร่วมกัน) ---
         public async Task<BillSummaryDto?> GetParticipantBillPreviewAsync(string participantType, int participantId, int organizerUserId)
         {

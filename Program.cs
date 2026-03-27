@@ -10,6 +10,8 @@ using DropInBadAPI.Service.Mobile.Organizer;
 using DropInBadAPI.Service.Mobile.Game;
 using DropInBadAPI.Service.Mobile.Profile;
 using DropInBadAPI.Hubs;
+using DropInBadAPI.Utilities; // เพิ่ม using สำหรับ Combinatorics
+using DropInBadAPI.Service.MobilePlayer.Game;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -106,6 +108,8 @@ builder.Services.AddScoped<IMatchManagementService, MatchManagementService>();
 builder.Services.AddScoped<IMatchRecommenderService, MatchRecommenderService>();
 builder.Services.AddScoped<IProfileService, ProfileService>();
 
+
+builder.Services.AddScoped<IPlayerGameSessionService, PlayerGameSessionService>();
 
 
 

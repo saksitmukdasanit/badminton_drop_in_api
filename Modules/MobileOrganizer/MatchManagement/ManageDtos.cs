@@ -1,66 +1,5 @@
 namespace DropInBadAPI.Dtos
 {
-    // DTO หลักสำหรับหน้า Manage
-    public class ManageGameSessionDto
-    {
-        public int SessionId { get; set; }
-        public string? GroupName { get; set; }
-        public int Status { get; set; } // สถานะก๊วน (สำคัญมากสำหรับ Frontend)
-        public DateTime SessionStart { get; set; }
-        public DateTime SessionEnd { get; set; }
-
-        // ข้อมูลสนาม
-        public string? VenueName { get; set; }
-        public string? VenueAddress { get; set; }
-
-        // ข้อมูลค่าใช้จ่ายและลูกแบด
-        public string? ShuttlecockBrandName { get; set; }
-        public string? ShuttlecockModelName { get; set; }
-        public decimal? ShuttlecockCostPerUnit { get; set; }
-        public decimal? CourtFeePerPerson { get; set; }
-        public int MaxParticipants { get; set; }
-        public int CurrentParticipants { get; set; }
-        public string? GameTypeName { get; set; } // เพิ่ม GameTypeName
-
-        // ข้อมูลอื่นๆ
-        public string? Notes { get; set; }
-        public List<string> PhotoUrls { get; set; } = new();
-
-        // รายชื่อผู้เข้าร่วมทั้งหมด (ทั้งสมาชิกและ Walk-in)
-        public List<ParticipantDto> Participants { get; set; } = new();
-    }
-
-    // DTO สำหรับผู้เข้าร่วมแต่ละคน
-    public class ParticipantDto
-    {
-        public int ParticipantId { get; set; } // ID จากตาราง SessionParticipants หรือ WalkinID
-        public required string ParticipantType { get; set; } // "Member" หรือ "Guest"
-        public int? UserId { get; set; } // มีค่าถ้าเป็น Member
-        public string? Nickname { get; set; }
-        public string? FullName { get; set; }
-        public string? GenderName { get; set; }
-        public string? ProfilePhotoUrl { get; set; }
-
-        // ข้อมูลระดับมือ
-        public int? SkillLevelId { get; set; }
-        public string? SkillLevelName { get; set; }
-        public string? SkillLevelColor { get; set; }
-
-        public int Status { get; set; } // สถานะการเข้าร่วม: 1=เข้าร่วม, 2=รอคิว
-        public DateTime? CheckinTime { get; set; }
-        public int TotalGamesPlayed { get; set; } // NEW: เพิ่มฟิลด์จำนวนเกมที่เล่น
-    }
-
-    public record AddGuestDto(
-        string GuestName,
-        string? PhoneNumber,
-        int Gender,
-        int? SkillLevelId
-    );
-
-    public record UpdateSkillLevelDto(
-        int? SkillLevelId
-    );
 
     public class LiveSessionStateDto
     {
@@ -150,11 +89,11 @@ namespace DropInBadAPI.Dtos
     }
 
     // ====== DTOs for PUT /my-result ======
-    public record SubmitResultDto(int Result, string? Notes); // 1=Win, 2=Loss, 3=Draw
+
 
     // ====== DTOs for POST /checkout ======
 
-      public class CheckoutRequestDto
+    public class CheckoutRequestDto
     {
         public List<BillLineItemDto>? CustomLineItems { get; set; }
     }
@@ -246,6 +185,9 @@ namespace DropInBadAPI.Dtos
         public List<PlayerInMatchDto> Opponents { get; set; } = new();
     }
 
+
+
+
     public class SessionRosterPlayerDto
     {
         public int No { get; set; }
@@ -261,31 +203,11 @@ namespace DropInBadAPI.Dtos
         public int Status { get; set; } // NEW: เพิ่มสถานะ (1=Joined, 2=Waitlisted)
     }
 
-    // --- NEW: DTO สำหรับ Auto Match ---
-    public class AutoMatchRequestDto
+    public enum SuggestionCriteria
     {
-        public bool IsMixedMode { get; set; }
-        public List<string> ExcludedPlayerIds { get; set; } = new(); // ID ของคนที่ Pause/End เช่น ["Member_1", "Guest_5"]
+        ByWaitTime,
+        ByBalancedSkill,
+        Mixed
     }
 
-    // --- NEW: DTO สำหรับสลับตัวผู้เล่น ---
-    public class SwapPlayersRequestDto
-    {
-        public PlayerSelectionDto Player1 { get; set; }
-        public PlayerSelectionDto Player2 { get; set; }
-    }
-
-    // --- NEW: DTO สำหรับดึงตัวสำรองลงสนาม ---
-    public class AssignReserveRequestDto
-    {
-        public string TargetCourtIdentifier { get; set; } // สนามที่จะเอาลง
-        public bool IsQueueMode { get; set; } // true = ตามคิว, false = ตามเลขสนาม
-    }
-
-    // --- NEW: DTO สำหรับย้ายผู้เล่น (Move Players) ---
-    public class MovePlayersRequestDto
-    {
-        public List<PlayerSelectionDto> Players { get; set; } = new();
-        public string TargetCourtIdentifier { get; set; } // เป้าหมาย (เลขสนาม หรือ รหัสทีมสำรอง)
-    }
 }

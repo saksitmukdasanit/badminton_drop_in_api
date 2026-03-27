@@ -7,7 +7,6 @@ namespace DropInBadAPI.Interfaces
         Task<LiveSessionStateDto?> GetLiveStateAsync(int sessionId, int organizerUserId);
         Task<CurrentlyPlayingMatchDto> StartMatchAsync(int sessionId, int organizerUserId, CreateMatchDto dto);
         Task<bool> EndMatchAsync(int matchId, int organizerUserId);
-        Task<bool> SubmitPlayerResultAsync(int matchId, int userId, SubmitResultDto dto);
         Task<BillSummaryDto?> GetParticipantBillPreviewAsync(string participantType, int participantId, int organizerUserId);
         Task<BillSummaryDto?> CheckoutParticipantAsync(string participantType, int participantId, int organizerUserId, CheckoutRequestDto? customCheckout = null);
         Task<bool> PayBillAsync(int billId, int organizerUserId, PaymentRequestDto dto); // --- NEW ---

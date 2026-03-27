@@ -1459,7 +1459,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             if (session == null) return (false, "Session not found.");
             if (session.Status != 2) return (false, "Competition has not started yet.");
 
-            // 1. หาผู้เล่นที่ "ไม่ว่าง" (เล่นอยู่ หรือ รอคิวในสนาม)
+            // 1. หาผู้เล่นที่ "ไม่ว่าง" (เล่นอยู่ หรือ อยู่ใน Staged Match)
             // Status 4 = Staged, 1 = Playing (แก้ไขจาก 0 เป็น 4)
             var busyUserIds = new HashSet<int>();
             var busyWalkinIds = new HashSet<int>();
@@ -1474,8 +1474,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                 }
             }
 
-            // 2. รวบรวมผู้เล่นที่ "ว่าง" และ "พร้อม" (Status = 1 Joined)
-            var availablePlayers = new List<dynamic>(); // ใช้ dynamic หรือ class ย่อยเพื่อคำนวณ
+            // 2. รวบรวมผู้เล่นที่ "ว่าง" และ "พร้อม" (Status = 1 Joined และ Check-in แล้ว)
+            var availablePlayers = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
 
             // Helper เช็ค Excluded (Paused/Ended)
             // FIX: เปรียบเทียบแบบ Case-Insensitive เพื่อความชัวร์
@@ -1498,10 +1498,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 int gamesPlayed = playedMatches.Count;
                 DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? p.CheckinTime ?? DateTime.UtcNow;
 
-                availablePlayers.Add(new { 
-                    Id = p.ParticipantId, Type = "Member", UserId = (int?)p.UserId, WalkinId = (int?)null,
-                    Skill = p.SkillLevelId ?? 0, Games = gamesPlayed, Wait = waitingSince 
-                });
+                availablePlayers.Add((p.ParticipantId, "Member", p.UserId, null, p.SkillLevelId ?? 0, gamesPlayed, waitingSince));
             }
 
             // Walk-in
@@ -1516,40 +1513,51 @@ namespace DropInBadAPI.Service.Mobile.Game
                 int gamesPlayed = playedMatches.Count;
                 DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? g.CheckinTime ?? DateTime.UtcNow;
 
-                availablePlayers.Add(new { 
-                    Id = g.WalkinId, Type = "Guest", UserId = (int?)null, WalkinId = (int?)g.WalkinId,
-                    Skill = g.SkillLevelId ?? 0, Games = gamesPlayed, Wait = waitingSince 
-                });
+                availablePlayers.Add((g.WalkinId, "Guest", null, g.WalkinId, g.SkillLevelId ?? 0, gamesPlayed, waitingSince));
             }
 
-            // 3. เรียงลำดับ (Games น้อยสุด -> รอนานสุด)
             if (availablePlayers.Count < 4) return (false, "Not enough players available (need 4).");
 
-            var sortedPlayers = availablePlayers
+            // 3. เรียงลำดับพื้นฐาน (Games น้อยสุด -> รอนานสุด) เพื่อหาคนที่มีสิทธิ์ลงสนามมากที่สุด
+            var baseSortedPlayers = availablePlayers
                 .OrderBy(p => p.Games)
                 .ThenBy(p => p.Wait)
-                .Take(4)
                 .ToList();
 
-            // 4. จัดทีม (Algorithm)
-            List<dynamic> teamA = new();
-            List<dynamic> teamB = new();
+            var selectedPlayers = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
 
             if (dto.IsMixedMode)
             {
-                // สูตร Mixed: เรียง Skill น้อย->มาก แล้วจับคู่ (อ่อนสุด+เก่งสุด) vs (กลาง+กลาง)
-                var pSorted = sortedPlayers.OrderBy(p => (int)p.Skill).ToList();
-                teamA.Add(pSorted[0]); teamA.Add(pSorted[3]);
-                teamB.Add(pSorted[1]); teamB.Add(pSorted[2]);
+                // โหมดผสม (Mixed): เอา 4 คนแรกตามคิว (มีทั้งเก่งและอ่อนปนกัน)
+                selectedPlayers = baseSortedPlayers.Take(4).ToList();
             }
             else
             {
-                // สูตร Skill: เรียงตาม Skill แล้วแบ่งครึ่ง (อ่อน+อ่อน) vs (เก่ง+เก่ง) หรือตามความเหมาะสม
-                // ในที่นี้ใช้สูตรเดียวกับ Mixed ไปก่อนเพื่อความง่าย หรือปรับตามต้องการ
-                var pSorted = sortedPlayers.OrderBy(p => (int)p.Skill).ToList();
-                teamA.Add(pSorted[0]); teamA.Add(pSorted[3]);
-                teamB.Add(pSorted[1]); teamB.Add(pSorted[2]);
+                // โหมดจัดตามมือ (Skill-based): เอาคนคิวแรกสุดเป็นตัวตั้งเพื่อรับประกันสิทธิ์การเล่น
+                // แล้วหาอีก 3 คนที่ "ระดับมือใกล้เคียงที่สุด" จากคิวที่เหลือ
+                var firstPlayer = baseSortedPlayers.First();
+                selectedPlayers.Add(firstPlayer);
+
+                var remainingPlayers = baseSortedPlayers.Skip(1)
+                    .OrderBy(p => Math.Abs(p.Skill - firstPlayer.Skill)) // เน้นระดับมือใกล้เคียงกับคนแรกสุดก่อน
+                    .ThenBy(p => p.Games) // ถ้ามือใกล้เคียงกัน ให้ดูจำนวนเกม
+                    .ThenBy(p => p.Wait)  // ถ้าเกมเท่ากัน ให้ดูเวลารอ
+                    .Take(3)
+                    .ToList();
+
+                selectedPlayers.AddRange(remainingPlayers);
             }
+
+            // 4. จัดทีม (Algorithm)
+            var teamA = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
+            var teamB = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
+
+            // เรียงลำดับ 4 คนที่เลือกมาตาม Skill อีกครั้งเพื่อจับคู่ให้สูสี
+            var pSorted = selectedPlayers.OrderBy(p => p.Skill).ToList();
+            
+            // เพื่อความสมดุลของทีม ให้จับคู่ (อ่อนสุด+เก่งสุด) vs (กลาง+กลาง) เสมอเพื่อให้รูปเกมออกมาสูสี
+            teamA.Add(pSorted[0]); teamA.Add(pSorted[3]);
+            teamB.Add(pSorted[1]); teamB.Add(pSorted[2]);
 
             // 5. หาสนามว่าง
             // ดึงหมายเลขสนามทั้งหมดที่มี
