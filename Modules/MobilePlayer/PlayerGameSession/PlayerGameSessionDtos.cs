@@ -123,4 +123,17 @@ namespace DropInBadAPI.Dtos
             // สืบทอดตัวเดิมมาใช้ซ้ำ แล้วเพิ่ม Teammate เข้าไป
             public PlayerInMatchDto Teammate { get; set; } = new();
         }
+
+    public class CustomLineItemDto
+    {
+        public string Description { get; set; } = string.Empty;
+        public decimal Amount { get; set; }
+    }
+
+    public class PlayerPaymentRequestDto
+    {
+        public string PaymentMethod { get; set; } = string.Empty;
+        public decimal Amount { get; set; }
+        public List<CustomLineItemDto>? CustomItems { get; set; }
+    }
 }

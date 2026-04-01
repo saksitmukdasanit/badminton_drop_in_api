@@ -655,8 +655,11 @@ namespace DropInBadAPI.Services
             return true;
         }
 
-        public async Task<(bool Success, string Message)> CheckinParticipantAsync(int sessionId, CheckinDto dto)
+        public async Task<(bool Success, string Message)> CheckinParticipantAsync(int sessionId, int organizerUserId, CheckinDto dto)
         {
+            var session = await _context.GameSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+            if (session == null) return (false, "Session not found or you do not have permission.");
+
             if (dto.ParticipantId.HasValue && !string.IsNullOrEmpty(dto.ParticipantType))
             {
                 if (dto.ParticipantType.Equals("Member", StringComparison.OrdinalIgnoreCase))

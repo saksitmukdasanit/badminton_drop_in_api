@@ -349,7 +349,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                     OrganizerImageUrl = s.CreatedByUser.UserProfile.ProfilePhotoUrl,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
                     GameTypeName = s.GameType!.TypeName,
                     ShuttlecockBrandName = s.ShuttlecockModel!.Brand!.BrandName,
                     ShuttlecockModelName = s.ShuttlecockModel.ModelName,
@@ -1181,10 +1181,18 @@ namespace DropInBadAPI.Service.Mobile.Game
                 // 2. ตรวจสอบบิล
                 var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
                 decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
-                
+
                 decimal totalVal = 0;
                 if (paidVal > 0)
                 {
+                    // --- NEW: If paid, check if court fee was part of the payment ---
+                    bool courtFeeAlreadyPaid = bills.Any(b => b.Status == 2 && b.BillLineItems.Any(li => li.Description == "ค่าคอร์ท"));
+                    if (courtFeeAlreadyPaid)
+                    {
+                        // If court fee was paid, don't add it again to the total cost for display.
+                        // Just calculate the shuttle fee.
+                        totalVal = sPart;
+                    }
                     // ถ้าจ่ายแล้ว ให้ใช้ยอดจากบิล (เพราะอาจมีการแก้ราคา)
                     totalVal = bills.Sum(b => b.TotalAmount);
                 }
@@ -1498,7 +1506,9 @@ namespace DropInBadAPI.Service.Mobile.Game
                 int gamesPlayed = playedMatches.Count;
                 DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? p.CheckinTime ?? DateTime.UtcNow;
 
-                availablePlayers.Add((p.ParticipantId, "Member", p.UserId, null, p.SkillLevelId ?? 0, gamesPlayed, waitingSince));
+                // ใช้ LevelRank แทน SkillLevelId เพื่อให้การคำนวณฝีมือสมเหตุสมผล
+                int skillRank = p.SkillLevel != null ? (int)p.SkillLevel.LevelRank : 0;
+                availablePlayers.Add((p.ParticipantId, "Member", p.UserId, null, skillRank, gamesPlayed, waitingSince));
             }
 
             // Walk-in
@@ -1513,7 +1523,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                 int gamesPlayed = playedMatches.Count;
                 DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? g.CheckinTime ?? DateTime.UtcNow;
 
-                availablePlayers.Add((g.WalkinId, "Guest", null, g.WalkinId, g.SkillLevelId ?? 0, gamesPlayed, waitingSince));
+                int skillRank = g.SkillLevel != null ? (int)g.SkillLevel.LevelRank : 0;
+                availablePlayers.Add((g.WalkinId, "Guest", null, g.WalkinId, skillRank, gamesPlayed, waitingSince));
             }
 
             if (availablePlayers.Count < 4) return (false, "Not enough players available (need 4).");
@@ -1533,32 +1544,139 @@ namespace DropInBadAPI.Service.Mobile.Game
             }
             else
             {
-                // โหมดจัดตามมือ (Skill-based): เอาคนคิวแรกสุดเป็นตัวตั้งเพื่อรับประกันสิทธิ์การเล่น
-                // แล้วหาอีก 3 คนที่ "ระดับมือใกล้เคียงที่สุด" จากคิวที่เหลือ
-                var firstPlayer = baseSortedPlayers.First();
-                selectedPlayers.Add(firstPlayer);
-
-                var remainingPlayers = baseSortedPlayers.Skip(1)
-                    .OrderBy(p => Math.Abs(p.Skill - firstPlayer.Skill)) // เน้นระดับมือใกล้เคียงกับคนแรกสุดก่อน
-                    .ThenBy(p => p.Games) // ถ้ามือใกล้เคียงกัน ให้ดูจำนวนเกม
-                    .ThenBy(p => p.Wait)  // ถ้าเกมเท่ากัน ให้ดูเวลารอ
-                    .Take(3)
+                // NEW LOGIC for Skill-based matching
+                // 1. Group available players by skill level
+                var playersBySkill = baseSortedPlayers
+                    .GroupBy(p => p.Skill)
+                    .Select(g => new {
+                        Skill = g.Key,
+                        Players = g.ToList(),
+                        Count = g.Count(),
+                        // Find the earliest wait time in the group to prioritize the group that has been waiting the longest
+                        MinWaitTime = g.Min(p => p.Wait) 
+                    })
+                    .OrderBy(g => g.MinWaitTime) // Prioritize groups that have members waiting longer
                     .ToList();
 
-                selectedPlayers.AddRange(remainingPlayers);
+                // 2. Find the first group with 4 or more players
+                var bestGroup = playersBySkill.FirstOrDefault(g => g.Count >= 4);
+
+                if (bestGroup != null)
+                {
+                    // Found a group of 4+ with the same skill. Take the first 4 from that group.
+                    selectedPlayers = bestGroup.Players.Take(4).ToList();
+                }
+                else
+                {
+                    // Fallback: If no group of 4 with the same skill exists, use the old logic (closest skill to the top of the queue).
+                    var firstPlayer = baseSortedPlayers.First();
+                    selectedPlayers.Add(firstPlayer);
+
+                    var remainingPlayers = baseSortedPlayers.Skip(1)
+                        .OrderBy(p => Math.Abs(p.Skill - firstPlayer.Skill))
+                        .ThenBy(p => p.Games)
+                        .ThenBy(p => p.Wait)
+                        .Take(3)
+                        .ToList();
+
+                    selectedPlayers.AddRange(remainingPlayers);
+                }
             }
 
-            // 4. จัดทีม (Algorithm)
+            if (selectedPlayers.Count < 4)
+            {
+                return (false, "Not enough players to form a match with the selected criteria.");
+            }
+
+            // 4. จัดทีม (Algorithm) with variety
             var teamA = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
             var teamB = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
 
-            // เรียงลำดับ 4 คนที่เลือกมาตาม Skill อีกครั้งเพื่อจับคู่ให้สูสี
-            var pSorted = selectedPlayers.OrderBy(p => p.Skill).ToList();
-            
-            // เพื่อความสมดุลของทีม ให้จับคู่ (อ่อนสุด+เก่งสุด) vs (กลาง+กลาง) เสมอเพื่อให้รูปเกมออกมาสูสี
-            teamA.Add(pSorted[0]); teamA.Add(pSorted[3]);
-            teamB.Add(pSorted[1]); teamB.Add(pSorted[2]);
+            // --- NEW: Logic for pairing with variety ---
 
+            var selectedUserIds = selectedPlayers.Where(p => p.UserId.HasValue).Select(p => p.UserId.Value).ToList();
+            var selectedWalkinIds = selectedPlayers.Where(p => p.WalkinId.HasValue).Select(p => p.WalkinId.Value).ToList();
+
+            var matchHistoryGroups = await _context.MatchPlayers
+                .Where(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 2 &&
+                             ((mp.UserId.HasValue && selectedUserIds.Contains(mp.UserId.Value)) ||
+                              (mp.WalkinId.HasValue && selectedWalkinIds.Contains(mp.WalkinId.Value))))
+                .GroupBy(mp => mp.MatchId)
+                .Select(g => g.Select(p => new { p.Team, p.UserId, p.WalkinId }).ToList())
+                .ToListAsync();
+
+            Func<int?, int?, string> getPlayerIdentifier = (userId, walkinId) => userId.HasValue ? $"u_{userId.Value}" : $"w_{walkinId.Value}";
+            Func<string, string, string> getPairKey = (id1, id2) => string.Compare(id1, id2) < 0 ? $"{id1}|{id2}" : $"{id2}|{id1}";
+
+            var teammateHistory = new Dictionary<string, int>();
+            var opponentHistory = new Dictionary<string, int>();
+
+            foreach (var group in matchHistoryGroups)
+            {
+                for (int i = 0; i < group.Count; i++)
+                {
+                    for (int j = i + 1; j < group.Count; j++)
+                    {
+                        var player1InHistory = group[i];
+                        var player2InHistory = group[j];
+                        var p1_id = getPlayerIdentifier(player1InHistory.UserId, player1InHistory.WalkinId);
+                        var p2_id = getPlayerIdentifier(player2InHistory.UserId, player2InHistory.WalkinId);
+                        var pairKey = getPairKey(p1_id, p2_id);
+
+                        if (player1InHistory.Team == player2InHistory.Team)
+                        {
+                            teammateHistory[pairKey] = teammateHistory.GetValueOrDefault(pairKey, 0) + 1;
+                        }
+                        else
+                        {
+                            opponentHistory[pairKey] = opponentHistory.GetValueOrDefault(pairKey, 0) + 1;
+                        }
+                    }
+                }
+            }
+
+            var sortedSelectedPlayers = selectedPlayers.OrderBy(p => p.Skill).ToList();
+            var p1 = sortedSelectedPlayers[0]; var p2 = sortedSelectedPlayers[1]; var p3 = sortedSelectedPlayers[2]; var p4 = sortedSelectedPlayers[3];
+
+            var combinations = new List<(List<dynamic> team1, List<dynamic> team2)>
+            {
+                (new List<dynamic> { p1, p2 }, new List<dynamic> { p3, p4 }),
+                (new List<dynamic> { p1, p3 }, new List<dynamic> { p2, p4 }),
+                (new List<dynamic> { p1, p4 }, new List<dynamic> { p2, p3 })
+            };
+
+            var scoredCombinations = combinations.Select(combo =>
+            {
+                var typedTeamA = combo.team1.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
+                var typedTeamB = combo.team2.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
+
+                double balanceScore = Math.Abs(typedTeamA.Sum(pl => pl.Skill) - typedTeamB.Sum(pl => pl.Skill));
+                int historyScore = 0;
+
+                var tA_p1_id = getPlayerIdentifier(typedTeamA[0].UserId, typedTeamA[0].WalkinId);
+                var tA_p2_id = getPlayerIdentifier(typedTeamA[1].UserId, typedTeamA[1].WalkinId);
+                historyScore += teammateHistory.GetValueOrDefault(getPairKey(tA_p1_id, tA_p2_id), 0) * 2; // ให้ความสำคัญกับการไม่คู่ซ้ำ
+
+                var tB_p1_id = getPlayerIdentifier(typedTeamB[0].UserId, typedTeamB[0].WalkinId);
+                var tB_p2_id = getPlayerIdentifier(typedTeamB[1].UserId, typedTeamB[1].WalkinId);
+                historyScore += teammateHistory.GetValueOrDefault(getPairKey(tB_p1_id, tB_p2_id), 0) * 2;
+
+                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p1_id, tB_p1_id), 0);
+                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p1_id, tB_p2_id), 0);
+                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p2_id, tB_p1_id), 0);
+                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p2_id, tB_p2_id), 0);
+
+                return new { Combination = combo, BalanceScore = balanceScore, HistoryScore = historyScore };
+            }).ToList();
+
+            var bestCombination = scoredCombinations
+                .OrderBy(c => c.HistoryScore)
+                .ThenBy(c => c.BalanceScore)
+                .First();
+
+            teamA = bestCombination.Combination.team1.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
+            teamB = bestCombination.Combination.team2.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
+            
             // 5. หาสนามว่าง
             // ดึงหมายเลขสนามทั้งหมดที่มี
             var allCourts = !string.IsNullOrEmpty(session.CourtNumbers) 

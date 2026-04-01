@@ -126,7 +126,7 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPost("gamesessions/{sessionId}/checkin")]
         public async Task<ActionResult<Response<object>>> CheckinParticipant(int sessionId, [FromBody] CheckinDto dto)
         {
-            var (success, message) = await _matchService.CheckinParticipantAsync(sessionId, dto);
+            var (success, message) = await _matchService.CheckinParticipantAsync(sessionId, GetCurrentUserId(), dto);
             if (!success)
             {
                 return BadRequest(new Response<object> { Status = 400, Message = message });

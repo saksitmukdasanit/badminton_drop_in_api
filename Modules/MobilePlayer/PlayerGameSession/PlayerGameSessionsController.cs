@@ -3,6 +3,9 @@ using DropInBadAPI.Models;
 using DropInBadAPI.Service.MobilePlayer.Game;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using DropInBadAPI.Hubs;
 using DropInBadAPI.Data; // สำหรับ BadmintonDbContext
 using DropInBadAPI.Interfaces; // สำหรับ IMatchManagementService
 using System.Security.Claims;
@@ -15,7 +18,24 @@ namespace DropInBadAPI.Controllers.MobilePlayer
     public class PlayerGameSessionsController : ControllerBase
     {
         private readonly IPlayerGameSessionService _playerSessionService;
-        public PlayerGameSessionsController(IPlayerGameSessionService playerSessionService) { _playerSessionService = playerSessionService; }
+        private readonly BadmintonDbContext _context;
+        private readonly IConfiguration _configuration;
+        private readonly IHubContext<ManagementGameHub> _hubContext;
+        private readonly IMatchManagementService _matchManagementService;
+
+        public PlayerGameSessionsController(
+            IPlayerGameSessionService playerSessionService,
+            BadmintonDbContext context,
+            IConfiguration configuration,
+            IHubContext<ManagementGameHub> hubContext,
+            IMatchManagementService matchManagementService)
+        {
+            _playerSessionService = playerSessionService;
+            _context = context;
+            _configuration = configuration;
+            _hubContext = hubContext;
+            _matchManagementService = matchManagementService;
+        }
         private int GetCurrentUserId() => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
         [HttpGet("upcoming")]
@@ -129,6 +149,20 @@ namespace DropInBadAPI.Controllers.MobilePlayer
             var (success, errorMessage) = await _playerSessionService.SubmitMatchResultAsync(matchId, GetCurrentUserId(), dto);
             if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             return Ok(new Response<object> { Status = 200, Message = "Result saved successfully." });
+        }
+
+        [HttpPost("{id}/checkout-and-pay")]
+        public async Task<ActionResult<Response<object>>> CheckoutAndPay(int id, [FromBody] PlayerPaymentRequestDto dto)
+        {
+            var (success, errorMessage) = await _playerSessionService.CheckoutAndPayAsync(id, GetCurrentUserId(), dto);
+            
+            if (!success)
+            {
+                if (errorMessage.Contains("not found") || errorMessage.Contains("not part of")) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+                return StatusCode(500, new Response<object> { Status = 500, Message = errorMessage });
+            }
+            
+            return Ok(new Response<object> { Status = 200, Message = errorMessage });
         }
     }
 }

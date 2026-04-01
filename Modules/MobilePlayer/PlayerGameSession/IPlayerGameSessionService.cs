@@ -15,5 +15,6 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         Task<PlayerBillPreviewDto?> GetMyBillPreviewAsync(int sessionId, int userId);
         Task<PlayerStatsDto?> GetMyStatsAsync(int sessionId, int userId);
         Task<(bool Success, string ErrorMessage)> SubmitMatchResultAsync(int matchId, int userId, SubmitMatchResultDto dto);
+        Task<(bool Success, string ErrorMessage)> CheckoutAndPayAsync(int sessionId, int userId, PlayerPaymentRequestDto dto);
     }
 }

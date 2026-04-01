@@ -17,6 +17,14 @@ namespace DropInBadAPI.Services
 
         public async Task<List<RecommendedMatchDto>> SuggestMatchesAsync(int sessionId, SuggestionCriteria criteria)
         {
+            var session = await _context.GameSessions.FindAsync(sessionId);
+            if (session == null) return new List<RecommendedMatchDto>();
+
+            // โหลด LevelRank ของ Organizer คนนี้มาเก็บไว้ใน Dictionary อ้างอิงด้วย SkillLevelId
+            var skillLevelRanks = await _context.OrganizerSkillLevels
+                .Where(sl => sl.OrganizerUserId == session.CreatedByUserId)
+                .ToDictionaryAsync(sl => sl.SkillLevelId, sl => sl.LevelRank);
+
             var waitingPlayers = await GetWaitingPlayersAsync(sessionId);
 
             if (waitingPlayers.Count < 4)
@@ -30,7 +38,7 @@ namespace DropInBadAPI.Services
                     return GenerateMatchesByWaitTime(waitingPlayers);
 
                 case SuggestionCriteria.ByBalancedSkill:
-                    return GenerateBalancedSkillMatches(waitingPlayers);
+                    return GenerateBalancedSkillMatches(waitingPlayers, skillLevelRanks);
 
                 default:
                     return GenerateMatchesByWaitTime(waitingPlayers);
@@ -97,12 +105,14 @@ namespace DropInBadAPI.Services
             return recommendations;
         }
 
-        private List<RecommendedMatchDto> GenerateBalancedSkillMatches(List<WaitingPlayerDto> players)
+        private List<RecommendedMatchDto> GenerateBalancedSkillMatches(List<WaitingPlayerDto> players, Dictionary<int, short> skillLevelRanks)
         {
             var playersWithScore = players.Select(p => new
             {
                 Player = p,
-                Score = GetScoreFromSkillLevel(p.SkillLevelName)
+                // ดึง LevelRank มาใช้ (ถ้าไม่มีให้ถือเป็นค่ากลางๆ เช่น 5)
+                Score = p.SkillLevelId.HasValue && skillLevelRanks.ContainsKey(p.SkillLevelId.Value) 
+                        ? (int)skillLevelRanks[p.SkillLevelId.Value] : 5
             })
             .OrderBy(p => p.Player.TotalGamesPlayed)
             .ThenBy(p => p.Player.CheckedInTime)
@@ -137,16 +147,6 @@ namespace DropInBadAPI.Services
                 });
             }
             return recommendations;
-        }
-
-        private int GetScoreFromSkillLevel(string? skillLevelName)
-        {
-            if (string.IsNullOrEmpty(skillLevelName)) return 5;
-            return skillLevelName.ToUpper() switch
-            {
-                "S" => 20, "A" => 18, "B+" => 16, "B" => 15, "C+" => 13,
-                "C" => 12, "P+" => 10, "P" => 9, "N" => 7, _ => 5
-            };
         }
     }
 }

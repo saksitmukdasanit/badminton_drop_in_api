@@ -1,7 +1,11 @@
 using DropInBadAPI.Data;
 using DropInBadAPI.Dtos;
+using DropInBadAPI.Hubs;
+using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Globalization;
 
 namespace DropInBadAPI.Service.MobilePlayer.Game
@@ -9,10 +13,20 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
     public class PlayerGameSessionService : IPlayerGameSessionService
     {
         private readonly BadmintonDbContext _context;
+        private readonly IConfiguration _configuration;
+        private readonly IHubContext<ManagementGameHub> _hubContext;
+        private readonly IMatchManagementService _matchManagementService;
 
-        public PlayerGameSessionService(BadmintonDbContext context)
+        public PlayerGameSessionService(
+            BadmintonDbContext context, 
+            IConfiguration configuration,
+            IHubContext<ManagementGameHub> hubContext,
+            IMatchManagementService matchManagementService)
         {
             _context = context;
+            _configuration = configuration;
+            _hubContext = hubContext;
+            _matchManagementService = matchManagementService;
         }
 
         public async Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int page = 1, int limit = 10)
@@ -57,7 +71,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -107,6 +121,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             // ดึงข้อมูลก๊วนทั้งหมดที่มีชื่อ User คนนี้อยู่ใน Participant List
             var sessions = await _context.GameSessions
                 .Where(s => s.SessionParticipants.Any(p => p.UserId == userId))
+                // ซ่อนก๊วนที่ผู้เล่นคนนี้ Checkout (จ่ายเงินและออกไปแล้ว) เพื่อให้ย้ายไปโผล่ที่หน้าประวัติแทน
+                .Where(s => !s.SessionParticipants.Any(p => p.UserId == userId && p.CheckoutTime != null))
                 // กรองเฉพาะเกมที่ยังไม่ผ่านไป หรือ เกมที่สถานะถูกยกเลิก/รอคืนเงิน (เพื่อไม่ให้ประวัติหายก่อนได้เงินคืน)
                 .Where(s => s.SessionDate >= today ||
                             s.Status == 3 || s.Status == 4 || 
@@ -125,7 +141,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 var userParticipation = s.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
                 string userStatusStr = userParticipation?.Status switch
                 {
-                    1 => userParticipation.CheckinTime != null ? "CheckedIn" : "Joined",      // ตัวจริง (เช็คอินแล้วหรือยัง)
+                    1 => userParticipation.CheckoutTime != null ? "CheckedOut" : (userParticipation.CheckinTime != null ? "CheckedIn" : "Joined"), // เพิ่มการเช็ค CheckedOut
                     2 => "Waitlisted",  // สำรอง
                     3 => "Refund",      // ยกเลิก / รอคืนเงิน
                     _ => "NotJoined"
@@ -149,7 +165,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -181,7 +197,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             // 1. ดึงเฉพาะก๊วนที่ผู้เล่นคนนี้มีชื่ออยู่ และ "วันที่ผ่านไปแล้ว"
             var query = _context.GameSessions
                 .Where(s => s.SessionParticipants.Any(p => p.UserId == userId))
-                .Where(s => s.SessionDate < today);
+                // ดึงมาแสดงถ้า 1) วันที่ผ่านไปแล้ว 2) ก๊วนนั้นจบแล้ว(Status=4) หรือ 3) ตัวผู้เล่นเอง Checkout/จ่ายเงินไปแล้ว
+                .Where(s => s.SessionDate < today || s.Status == 4 || s.SessionParticipants.Any(p => p.UserId == userId && p.CheckoutTime != null));
 
             if (!string.IsNullOrWhiteSpace(keyword))
             {
@@ -208,7 +225,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -219,7 +236,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
                     ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
                     CostingMethod = s.CostingMethod,
-                    UserStatus = s.SessionParticipants.Where(p => p.UserId == userId).Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined") : p.Status == 2 ? "Waitlisted" : p.Status == 3 ? "Refund" : "NotJoined").FirstOrDefault() ?? "NotJoined"
+                    UserStatus = s.SessionParticipants.Where(p => p.UserId == userId).Select(p => p.Status == 1 ? (p.CheckoutTime != null ? "CheckedOut" : (p.CheckinTime != null ? "CheckedIn" : "Joined")) : p.Status == 2 ? "Waitlisted" : p.Status == 3 ? "Refund" : "NotJoined").FirstOrDefault() ?? "NotJoined"
                 });
 
             var result = await projectedQuery.ToListAsync();
@@ -320,7 +337,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 {
                     session.CurrentUserStatus = currentUserParticipation.Status switch
                     {
-                        1 => "Joined", 2 => "Waitlisted", _ => "NotJoined"
+                        1 => currentUserParticipation.CheckoutTime != null ? "CheckedOut" : (currentUserParticipation.CheckinTime != null ? "CheckedIn" : "Joined"),
+                        2 => "Waitlisted",
+                        3 => "Refund",
+                        _ => "NotJoined"
                     };
                 }
             }
@@ -482,23 +502,56 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
         public async Task<PlayerBillPreviewDto?> GetMyBillPreviewAsync(int sessionId, int userId)
         {
-            var session = await _context.GameSessions.Include(s => s.SessionParticipants).FirstOrDefaultAsync(s => s.SessionId == sessionId);
+            var session = await _context.GameSessions.AsNoTracking().FirstOrDefaultAsync(s => s.SessionId == sessionId);
             if (session == null) return null;
-            
-            var participant = session.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
+
+            var participant = await _context.SessionParticipants.AsNoTracking().FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
             if (participant == null) return null;
 
+            var dto = new PlayerBillPreviewDto();
+
+            // 1. Court Fee & Service Fee
+            var initialBill = await _context.ParticipantBills
+                .AsNoTracking()
+                .FirstOrDefaultAsync(b => b.SessionId == sessionId && b.UserId == userId && b.Status != 3);
+
+            // If the initial bill was NOT paid, we need to include its cost.
+            if (initialBill == null || initialBill.Status != 2)
+            {
+                decimal courtFee = session.CourtFeePerPerson ?? 0;
+                if (courtFee > 0)
+                {
+                    dto.LineItems.Add(new BillLineItemDto { Description = "ค่าคอร์ท", Amount = courtFee });
+                }
+
+                decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                if (serviceFee > 0)
+                {
+                    dto.LineItems.Add(new BillLineItemDto { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                }
+            }
+
+            // 2. Shuttlecock Fee
             var playedMatchesCount = await _context.Matches
                 .CountAsync(m => m.SessionId == sessionId && m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId));
 
-            decimal courtFee = session.CourtFeePerPerson ?? 0;
-            decimal shuttleFee = (session.ShuttlecockFeePerPerson ?? 0) * playedMatchesCount;
-            decimal serviceFee = 10; // ค่าธรรมเนียมระบบ
-
-            var dto = new PlayerBillPreviewDto();
-            if (courtFee > 0) dto.LineItems.Add(new BillLineItemDto { Description = "ค่าคอร์ท", Amount = courtFee });
-            dto.LineItems.Add(new BillLineItemDto { Description = "ค่าธรรมเนียม", Amount = serviceFee });
-            if (shuttleFee > 0) dto.LineItems.Add(new BillLineItemDto { Description = $"ค่าลูกแบด ({playedMatchesCount} เกม)", Amount = shuttleFee });
+            decimal shuttleTotal = 0;
+            if (session.CostingMethod == 2 && session.ShuttlecockFeePerPerson.HasValue) // Buffet
+            {
+                shuttleTotal = session.ShuttlecockFeePerPerson.Value;
+                if (shuttleTotal > 0)
+                {
+                    dto.LineItems.Add(new BillLineItemDto { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = shuttleTotal });
+                }
+            }
+            else if (session.ShuttlecockFeePerPerson.HasValue) // Per game
+            {
+                shuttleTotal = (session.ShuttlecockFeePerPerson.Value) * playedMatchesCount;
+                if (shuttleTotal > 0)
+                {
+                    dto.LineItems.Add(new BillLineItemDto { Description = $"ค่าลูกแบด ({playedMatchesCount} เกม)", Amount = shuttleTotal });
+                }
+            }
 
             return dto;
         }
@@ -555,6 +608,136 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             await _context.SaveChangesAsync();
             return (true, "Result submitted successfully.");
+        }
+
+        public async Task<(bool Success, string ErrorMessage)> CheckoutAndPayAsync(int sessionId, int userId, PlayerPaymentRequestDto dto)
+        {
+            var session = await _context.GameSessions.FindAsync(sessionId);
+            if (session == null)
+            {
+                return (false, "Session not found.");
+            }
+
+            var participant = await _context.SessionParticipants
+                .FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
+
+            if (participant == null)
+            {
+                return (false, "You are not part of this session.");
+            }
+
+            if (participant.CheckoutTime != null)
+            {
+                return (false, "You have already checked out.");
+            }
+
+            var strategy = _context.Database.CreateExecutionStrategy();
+            return await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    var finalLineItems = new List<BillLineItem>();
+                    decimal finalTotalAmount = 0;
+
+                    // 1. Court Fee & Service Fee
+                    var initialBill = await _context.ParticipantBills
+                        .AsNoTracking()
+                        .Include(b => b.BillLineItems)
+                        .FirstOrDefaultAsync(b => b.SessionId == sessionId && b.UserId == userId && b.Status != 3);
+
+                    bool courtFeePaid = initialBill?.Status == 2 && initialBill.BillLineItems.Any(li => li.Description == "ค่าคอร์ท");
+
+                    if (!courtFeePaid)
+                    {
+                        decimal courtFee = session.CourtFeePerPerson ?? 0;
+                        if (courtFee > 0)
+                        {
+                            finalLineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = courtFee });
+                            finalTotalAmount += courtFee;
+                        }
+                        decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                        if (serviceFee > 0)
+                        {
+                            finalLineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                            finalTotalAmount += serviceFee;
+                        }
+                    }
+
+                    // 2. Shuttlecock Fee
+                    var matchesPlayed = await _context.Matches
+                        .Where(m => m.SessionId == session.SessionId && m.Status == 2 &&
+                                    m.MatchPlayers.Any(mp => mp.UserId == userId))
+                        .CountAsync();
+
+                    decimal shuttleTotal = 0;
+                    if (session.CostingMethod == 2 && session.ShuttlecockFeePerPerson.HasValue) // Buffet
+                    {
+                        shuttleTotal = session.ShuttlecockFeePerPerson.Value;
+                        if (shuttleTotal > 0) finalLineItems.Add(new BillLineItem { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = shuttleTotal });
+                    }
+                    else if (session.ShuttlecockFeePerPerson.HasValue) // Per game
+                    {
+                        shuttleTotal = (session.ShuttlecockFeePerPerson.Value) * matchesPlayed;
+                        if (shuttleTotal > 0) finalLineItems.Add(new BillLineItem { Description = $"ค่าลูกแบด ({matchesPlayed} เกม)", Amount = shuttleTotal });
+                    }
+                    finalTotalAmount += shuttleTotal;
+
+                    // 3. Custom Items
+                    if (dto.CustomItems != null && dto.CustomItems.Any())
+                    {
+                        foreach (var item in dto.CustomItems)
+                        {
+                            finalLineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                            finalTotalAmount += item.Amount;
+                        }
+                    }
+                    if (finalTotalAmount < 0) finalTotalAmount = 0;
+
+                    var billToUpdate = await _context.ParticipantBills
+                        .Include(b => b.BillLineItems)
+                        .FirstOrDefaultAsync(b => b.SessionId == sessionId && b.UserId == userId && b.Status != 3);
+
+                    if (billToUpdate == null)
+                    {
+                        billToUpdate = new ParticipantBill { SessionId = sessionId, UserId = userId, CreatedDate = DateTime.UtcNow };
+                        _context.ParticipantBills.Add(billToUpdate);
+                        billToUpdate.BillLineItems = finalLineItems;
+                    }
+                    else
+                    {
+                        _context.BillLineItems.RemoveRange(billToUpdate.BillLineItems);
+                        billToUpdate.BillLineItems = finalLineItems;
+                    }
+
+                    billToUpdate.TotalAmount = finalTotalAmount;
+                    billToUpdate.Status = 2; // Paid
+
+                    participant.CheckoutTime = DateTime.UtcNow;
+
+                    var payment = new Payment
+                    {
+                        PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1,
+                        Amount = finalTotalAmount,
+                        PaymentDate = DateTime.UtcNow,
+                    };
+                    // ผูก Object Payment เข้ากับ Bill โดยตรง เพื่อให้ EF Core จัดการ Foreign Key (BillId) ให้อัตโนมัติเมื่อกด Save
+                    billToUpdate.Payments.Add(payment);
+
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    var liveState = await _matchManagementService.GetLiveStateAsync(sessionId, session.CreatedByUserId);
+                    await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("ReceiveLiveStateUpdate", liveState);
+
+                    return (true, "Payment successful and checked out.");
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    return (false, $"An error occurred: {ex.Message}");
+                }
+            });
         }
     }
 }
