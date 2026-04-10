@@ -36,6 +36,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var userBookmarks = new HashSet<int>();
 
             var query = _context.GameSessions
+                .Include(s => s.SessionParticipants)
+                .Include(s => s.SessionWalkinGuests)
                 .Where(s => s.SessionDate >= today && s.Status == 1);
 
             // กรองก๊วนที่ผู้เล่นเข้าร่วมแล้ว (ตัวจริง หรือ ตัวสำรอง) ออกจากการค้นหาเพื่อไม่ให้สับสน
@@ -71,7 +73,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1 || p.Status == null) + s.SessionWalkinGuests.Count(g => g.Status == 1 || g.Status == null),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -131,6 +133,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 .Include(s => s.GameSessionPhotos)
                 .Include(s => s.CreatedByUser.UserProfile)
                 .Include(s => s.SessionParticipants)
+                .Include(s => s.SessionWalkinGuests) // FIX: Include Walk-in ให้ครบ
                 .Include(s => s.GameType)
                 .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
                 .OrderByDescending(s => s.SessionDate).ThenByDescending(s => s.StartTime)
@@ -165,7 +168,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1 || p.Status == null) + s.SessionWalkinGuests.Count(g => g.Status == 1 || g.Status == null),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -195,10 +198,12 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var userBookmarks = new HashSet<int>();
 
             // 1. ดึงเฉพาะก๊วนที่ผู้เล่นคนนี้มีชื่ออยู่ และ "วันที่ผ่านไปแล้ว"
-            var query = _context.GameSessions
+            IQueryable<GameSession> query = _context.GameSessions
                 .Where(s => s.SessionParticipants.Any(p => p.UserId == userId))
                 // ดึงมาแสดงถ้า 1) วันที่ผ่านไปแล้ว 2) ก๊วนนั้นจบแล้ว(Status=4) หรือ 3) ตัวผู้เล่นเอง Checkout/จ่ายเงินไปแล้ว
-                .Where(s => s.SessionDate < today || s.Status == 4 || s.SessionParticipants.Any(p => p.UserId == userId && p.CheckoutTime != null));
+                .Where(s => s.SessionDate < today || s.Status == 4 || s.SessionParticipants.Any(p => p.UserId == userId && p.CheckoutTime != null))
+                .Include(s => s.SessionParticipants)
+                .Include(s => s.SessionWalkinGuests);
 
             if (!string.IsNullOrWhiteSpace(keyword))
             {
@@ -225,7 +230,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
-                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1 || p.Status == null) + s.SessionWalkinGuests.Count(g => g.Status == 1 || g.Status == null),
                     GameTypeName = s.GameType != null ? s.GameType.TypeName : null,
                     ShuttlecockBrandName = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? s.ShuttlecockModel.Brand.BrandName : null,
                     ShuttlecockModelName = s.ShuttlecockModel != null ? s.ShuttlecockModel.ModelName : null,
@@ -374,26 +379,71 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             // 2. ข้อมูลการจ่ายเงิน
             var bill = session.ParticipantBills.OrderByDescending(b => b.CreatedDate).FirstOrDefault(b => b.UserId == userId && b.Status != 3);
-            if (bill != null)
+            
+            if (bill != null && bill.Status == 2)
             {
-                result.Payment.Status = bill.Status == 2 ? "Completed" : "Pending";
+                result.Payment.Status = "Completed";
                 result.Payment.TotalAmount = bill.TotalAmount;
-                result.Payment.CourtFee = bill.BillLineItems.Where(li => li.Description.Contains("คอร์ท")).Sum(li => li.Amount);
-                result.Payment.ServiceFee = bill.BillLineItems.Where(li => li.Description.Contains("ธรรมเนียม")).Sum(li => li.Amount);
+                result.Payment.LineItems = bill.BillLineItems.Select(li => new CustomLineItemDto { Description = li.Description, Amount = li.Amount }).ToList();
 
-                if (bill.Status == 2)
+                // --- FIX: ชดเชยข้อมูลให้บิลเก่าๆ ที่ค่าคอร์ทและค่าธรรมเนียมหายไปตอน Checkout ---
+                bool hasCourtFee = result.Payment.LineItems.Any(li => li.Description == "ค่าคอร์ท");
+                if (!hasCourtFee)
                 {
-                    var payment = await _context.Payments.OrderByDescending(p => p.PaymentDate).FirstOrDefaultAsync(p => p.BillId == bill.BillId);
-                    if (payment != null)
+                    decimal courtFee = session.CourtFeePerPerson ?? 0;
+                    decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+
+                    if (serviceFee > 0)
                     {
-                        result.Payment.PaymentDate = payment.PaymentDate.AddHours(7).ToString("dd/MM/yy HH:mm น.");
-                        result.Payment.PaymentMethod = payment.PaymentMethod == 1 ? "Cash" : "QR Code";
+                        result.Payment.LineItems.Insert(0, new CustomLineItemDto { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                        result.Payment.TotalAmount += serviceFee;
                     }
+                    if (courtFee > 0)
+                    {
+                        result.Payment.LineItems.Insert(0, new CustomLineItemDto { Description = "ค่าคอร์ท", Amount = courtFee });
+                        result.Payment.TotalAmount += courtFee;
+                    }
+                }
+
+                var payment = await _context.Payments.OrderByDescending(p => p.PaymentDate).FirstOrDefaultAsync(p => p.BillId == bill.BillId);
+                if (payment != null)
+                {
+                    result.Payment.PaymentDate = payment.PaymentDate.AddHours(7).ToString("dd/MM/yy HH:mm น.");
+                    result.Payment.PaymentMethod = payment.PaymentMethod == 1 ? "Cash" : "QR Code";
                 }
             }
             else
             {
                 result.Payment.Status = "Pending";
+                decimal courtFee = session.CourtFeePerPerson ?? 0;
+                decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                
+                if (courtFee > 0) result.Payment.LineItems.Add(new CustomLineItemDto { Description = "ค่าคอร์ท", Amount = courtFee });
+                if (serviceFee > 0) result.Payment.LineItems.Add(new CustomLineItemDto { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+
+                int matchesPlayed = playedMatches.Count;
+                decimal shuttleTotal = 0;
+                if (session.CostingMethod == 2 && session.ShuttlecockFeePerPerson.HasValue)
+                {
+                    shuttleTotal = session.ShuttlecockFeePerPerson.Value;
+                    if (shuttleTotal > 0) result.Payment.LineItems.Add(new CustomLineItemDto { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = shuttleTotal });
+                }
+                else if (session.ShuttlecockFeePerPerson.HasValue)
+                {
+                    shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed;
+                    if (shuttleTotal > 0) result.Payment.LineItems.Add(new CustomLineItemDto { Description = $"ค่าลูกแบด ({matchesPlayed} เกม)", Amount = shuttleTotal });
+                }
+
+                if (bill != null)
+                {
+                    var customItems = bill.BillLineItems.Where(li => li.Description != "ค่าคอร์ท" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).ToList();
+                    foreach (var c in customItems)
+                    {
+                        result.Payment.LineItems.Add(new CustomLineItemDto { Description = c.Description, Amount = c.Amount });
+                    }
+                }
+                
+                result.Payment.TotalAmount = result.Payment.LineItems.Sum(li => li.Amount);
             }
 
             // 3. ข้อมูลแมตช์ที่เล่นและเวลา
@@ -412,8 +462,18 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     DurationMinutes = duration,
                     CourtNumber = match.CourtNumber,
                     ShuttlecocksUsed = match.ShuttlecocksUsed,
-                    MyTeam = match.MatchPlayers.Where(mp => mp.Team == myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null }).ToList(),
-                    Opponents = match.MatchPlayers.Where(mp => mp.Team != myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null }).ToList()
+                    MyTeam = match.MatchPlayers.Where(mp => mp.Team == myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { 
+                        UserId = mp.UserId,
+                        WalkinId = mp.WalkinId,
+                        Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", 
+                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                    }).ToList(),
+                    Opponents = match.MatchPlayers.Where(mp => mp.Team != myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { 
+                        UserId = mp.UserId,
+                        WalkinId = mp.WalkinId,
+                        Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", 
+                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                    }).ToList()
                 });
             }
 
@@ -435,37 +495,91 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             return result;
         }
 
-        public async Task<(JoinSessionResponseDto? Data, string ErrorMessage)> JoinSessionAsync(int sessionId, int userId)
+        public async Task<(JoinSessionResponseDto? Data, string ErrorMessage)> JoinSessionAsync(int sessionId, int userId, PlayerJoinSessionRequestDto dto)
         {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants)
-                .Include(s => s.SessionWalkinGuests)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId);
+            var strategy = _context.Database.CreateExecutionStrategy();
+            return await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    var session = await _context.GameSessions
+                        .Include(s => s.SessionParticipants)
+                        .Include(s => s.SessionWalkinGuests)
+                        .FirstOrDefaultAsync(s => s.SessionId == sessionId);
 
-            if (session == null) return (null, "Session not found.");
-            if (session.Status != 1) return (null, "This session is no longer open for booking.");
-            if (session.CreatedByUserId == userId) return (null, "Organizers cannot join their own session as a participant.");
+                    if (session == null) return (null, "Session not found.");
+                    if (session.Status != 1) return (null, "This session is no longer open for booking.");
+                    if (session.CreatedByUserId == userId) return (null, "Organizers cannot join their own session as a participant.");
 
-            var existingParticipant = session.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
-            if (existingParticipant != null && existingParticipant.Status != 3) return (null, "You are already registered for this session.");
+                    var existingParticipant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.UserId == userId && p.SessionId == sessionId);
+                    if (existingParticipant != null && existingParticipant.Status != 3) return (null, "You are already registered for this session.");
 
-            int organizerUserId = session.CreatedByUserId;
-            int? savedSkillLevelId = await _context.UserOrganizerSkills.Where(uos => uos.OrganizerUserId == organizerUserId && uos.UserId == userId).Select(uos => (int?)uos.SkillLevelId).FirstOrDefaultAsync();
+                    // --- Concurrency Check ---
+                    var activeParticipants = session.SessionParticipants.Count(p => p.Status == 1) + session.SessionWalkinGuests.Count(g => g.Status == 1);
+                    var waitlistedParticipants = session.SessionParticipants.Count(p => p.Status == 2) + session.SessionWalkinGuests.Count(g => g.Status == 2);
 
-            var activeParticipants = session.SessionParticipants.Count(p => p.Status == 1) + session.SessionWalkinGuests.Count(g => g.Status == 1);
-            var waitlistedParticipants = session.SessionParticipants.Count(p => p.Status == 2) + session.SessionWalkinGuests.Count(g => g.Status == 2);
+                    int newStatus = (activeParticipants < session.MaxParticipants && waitlistedParticipants == 0) ? 1 : 2;
+                    string statusMessage = newStatus == 1 ? "Joined successfully." : "You are on the waitlist.";
 
-            int newStatus = (activeParticipants < session.MaxParticipants && waitlistedParticipants == 0) ? 1 : 2;
-            string statusMessage = newStatus == 1 ? "Joined successfully." : "You are on the waitlist.";
+                    // --- Create or Update Participant Entry ---
+                    SessionParticipant participantEntry = existingParticipant ?? new SessionParticipant { SessionId = sessionId, UserId = userId };
+                    participantEntry.Status = (byte)newStatus;
+                    participantEntry.JoinedDate = DateTime.UtcNow;
+                    // participantEntry.AutoPromote = dto.AutoPromote; // **NOTE: Add 'AutoPromote' property to SessionParticipant model**
 
-            SessionParticipant newParticipantEntry = existingParticipant ?? new SessionParticipant { SessionId = sessionId, UserId = userId };
-            newParticipantEntry.Status = (byte)newStatus;
-            newParticipantEntry.JoinedDate = DateTime.UtcNow;
-            newParticipantEntry.SkillLevelId = savedSkillLevelId;
+                    int? savedSkillLevelId = await _context.UserOrganizerSkills
+                        .Where(uos => uos.OrganizerUserId == session.CreatedByUserId && uos.UserId == userId)
+                        .Select(uos => (int?)uos.SkillLevelId)
+                        .FirstOrDefaultAsync();
+                    participantEntry.SkillLevelId = savedSkillLevelId;
 
-            if (existingParticipant == null) await _context.SessionParticipants.AddAsync(newParticipantEntry);
-            await _context.SaveChangesAsync();
-            return (new JoinSessionResponseDto { ParticipantId = newParticipantEntry.ParticipantId, Status = newStatus, StatusMessage = statusMessage }, string.Empty);
+                    if (existingParticipant == null)
+                    {
+                        await _context.SessionParticipants.AddAsync(participantEntry);
+                    }
+                    await _context.SaveChangesAsync(); // Save to get ParticipantId
+
+                    // --- Payment Processing ---
+                    decimal courtFee = session.CourtFeePerPerson ?? 0;
+                    decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                    decimal totalAmount = courtFee + serviceFee;
+
+                    if (totalAmount > 0)
+                    {
+                        var newBill = new ParticipantBill
+                        {
+                            SessionId = sessionId,
+                            UserId = userId,
+                            CreatedDate = DateTime.UtcNow,
+                            TotalAmount = totalAmount,
+                            Status = 2, // Mark as Paid immediately
+                            BillLineItems = new List<BillLineItem>()
+                        };
+                        if (courtFee > 0) newBill.BillLineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = courtFee });
+                        if (serviceFee > 0) newBill.BillLineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+
+                        var newPayment = new Payment
+                        {
+                            PaymentMethod = dto.PaymentMethod == "Credit/Debit Card" ? (byte)1 : (byte)2, // Assuming 1=Card, 2=Other digital
+                            Amount = totalAmount,
+                            PaymentDate = DateTime.UtcNow,
+                        };
+                        newBill.Payments.Add(newPayment);
+                        _context.ParticipantBills.Add(newBill);
+                    }
+
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    return (new JoinSessionResponseDto { ParticipantId = participantEntry.ParticipantId, Status = newStatus, StatusMessage = statusMessage }, string.Empty);
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    return (null, $"An error occurred: {ex.Message}");
+                }
+            });
         }
 
         public async Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId)
@@ -586,9 +700,19 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     Result = myMatchPlayer.Result,
                     Notes = myMatchPlayer.Notes,
                     Teammate = match.MatchPlayers.Where(mp => mp.Team == myMatchPlayer.Team && mp.UserId != userId)
-                        .Select(mp => new PlayerInMatchDto { Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A" }).FirstOrDefault() ?? new PlayerInMatchDto { Nickname = "N/A" },
+                        .Select(mp => new PlayerInMatchDto { 
+                            UserId = mp.UserId,
+                            WalkinId = mp.WalkinId,
+                            Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                        }).FirstOrDefault() ?? new PlayerInMatchDto { Nickname = "N/A" },
                     Opponents = match.MatchPlayers.Where(mp => mp.Team != myMatchPlayer.Team)
-                        .Select(mp => new PlayerInMatchDto { Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A" }).ToList()
+                        .Select(mp => new PlayerInMatchDto { 
+                            UserId = mp.UserId,
+                            WalkinId = mp.WalkinId,
+                            Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                        }).ToList()
                 });
             }
             stats.TotalMinutesPlayed = totalMinutes.ToString();
@@ -631,6 +755,15 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 return (false, "You have already checked out.");
             }
 
+            // --- NEW: ตรวจสอบว่ากำลังเล่นอยู่หรือไม่ ถ้าเล่นอยู่ห้าม Checkout ---
+            var isPlaying = await _context.MatchPlayers
+                .AnyAsync(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 1 && mp.UserId == userId);
+
+            if (isPlaying)
+            {
+                return (false, "คุณกำลังแข่งขันอยู่ในสนาม ไม่สามารถชำระเงินเพื่อเช็คเอาท์ได้ในขณะนี้");
+            }
+
             var strategy = _context.Database.CreateExecutionStrategy();
             return await strategy.ExecuteAsync(async () =>
             {
@@ -639,6 +772,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 {
                     var finalLineItems = new List<BillLineItem>();
                     decimal finalTotalAmount = 0;
+                    decimal newPaymentAmount = 0; // ยอดที่ต้องจ่ายเพิ่มในรอบนี้
 
                     // 1. Court Fee & Service Fee
                     var initialBill = await _context.ParticipantBills
@@ -655,12 +789,23 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         {
                             finalLineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = courtFee });
                             finalTotalAmount += courtFee;
+                            newPaymentAmount += courtFee;
                         }
                         decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
                         if (serviceFee > 0)
                         {
                             finalLineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
                             finalTotalAmount += serviceFee;
+                            newPaymentAmount += serviceFee;
+                        }
+                    }
+                    else
+                    {
+                        // นำรายการเดิมที่เคยจ่ายแล้วกลับมาใส่ในบิลเพื่อเก็บประวัติให้ครบ
+                        foreach (var item in initialBill.BillLineItems)
+                        {
+                            finalLineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                            finalTotalAmount += item.Amount;
                         }
                     }
 
@@ -690,8 +835,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         {
                             finalLineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                             finalTotalAmount += item.Amount;
+                            newPaymentAmount += item.Amount;
                         }
                     }
+                    if (newPaymentAmount < 0) newPaymentAmount = 0;
                     if (finalTotalAmount < 0) finalTotalAmount = 0;
 
                     var billToUpdate = await _context.ParticipantBills
@@ -715,14 +862,17 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                     participant.CheckoutTime = DateTime.UtcNow;
 
-                    var payment = new Payment
+                    if (newPaymentAmount > 0)
                     {
-                        PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1,
-                        Amount = finalTotalAmount,
-                        PaymentDate = DateTime.UtcNow,
-                    };
-                    // ผูก Object Payment เข้ากับ Bill โดยตรง เพื่อให้ EF Core จัดการ Foreign Key (BillId) ให้อัตโนมัติเมื่อกด Save
-                    billToUpdate.Payments.Add(payment);
+                        var payment = new Payment
+                        {
+                            PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1,
+                            Amount = newPaymentAmount,
+                            PaymentDate = DateTime.UtcNow,
+                        };
+                        // ผูก Object Payment เข้ากับ Bill โดยตรง เพื่อให้ EF Core จัดการ Foreign Key (BillId) ให้อัตโนมัติเมื่อกด Save
+                        billToUpdate.Payments.Add(payment);
+                    }
 
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
@@ -738,6 +888,20 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     return (false, $"An error occurred: {ex.Message}");
                 }
             });
+        }
+
+        public async Task<(bool Success, string ErrorMessage)> TogglePauseAsync(int sessionId, int userId, bool isPaused)
+        {
+            var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
+            if (participant == null) return (false, "Participant not found.");
+
+            // สร้าง ID ให้ตรงกับฟอร์แมตใน Flutter App ของผู้จัด
+            string playerId = $"Member_{participant.ParticipantId}";
+
+            // ส่ง SignalR แจ้งเตือนไปยังแอปผู้จัด (Group session-{sessionId})
+            await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("PlayerPauseStateChanged", new { PlayerId = playerId, IsPaused = isPaused });
+            
+            return (true, "Pause state updated.");
         }
     }
 }

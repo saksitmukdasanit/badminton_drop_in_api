@@ -876,8 +876,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             Notes = s.Notes,
 
             // --- NEW: คำนวณรายได้ (ต้องเพิ่ม Property ใน DTO ก่อน) ---
-            // PaidAmount = ยอดรวมบิลที่จ่ายแล้ว (Status = 2)
-            PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount),
+            // PaidAmount = ยอดรวมบิลที่จ่ายแล้ว (Status = 2) โดยหักค่าธรรมเนียมแพลตฟอร์มออกเพื่อให้เป็นรายได้สุทธิ
+            PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าธรรมเนียม").Sum(li => li.Amount),
             // TotalIncome = (จำนวนคน * ราคาต่อคน)
             TotalIncome = (s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1)) * ((s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0)),
 
@@ -957,13 +957,15 @@ namespace DropInBadAPI.Service.Mobile.Game
         public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId)
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
+            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
 
             var sessions = await _context.GameSessions
-               .Where(s => s.CreatedByUserId == organizerUserId && (s.SessionDate < today || s.Status != 1)) // << กรองอดีต หรือก๊วนที่จบ/ยกเลิกแล้ว (ไม่ Active)
+               .Where(s => s.CreatedByUserId == organizerUserId && (s.SessionDate < today || s.Status == 3 || s.Status == 4)) // กรองเฉพาะอดีต, ยกเลิก(3), หรือก๊วนที่กดจบแล้ว(4)
                .Include(s => s.Venue)
                .Include(s => s.SessionParticipants)
                .Include(s => s.SessionWalkinGuests)
                .Include(s => s.ParticipantBills) // ดึงบิลเพื่อคำนวณเงิน
+               .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
                .OrderByDescending(s => s.SessionDate) // เรียงจากล่าสุดไปเก่าสุด
                .ThenByDescending(s => s.StartTime)
                .ToListAsync();
@@ -972,33 +974,86 @@ namespace DropInBadAPI.Service.Mobile.Game
 
             foreach (var s in sessions)
             {
-                // คำนวณรายได้
-                // 1. รายได้ที่เก็บได้จริง (Paid) = ผลรวมของบิลทั้งหมด
-                decimal paidAmount = s.ParticipantBills.Sum(b => b.TotalAmount);
+                var activeMembers = s.SessionParticipants.Where(p => p.Status == 1).ToList();
+                var activeGuests = s.SessionWalkinGuests.Where(g => g.Status == 1).ToList();
+                int totalPlayers = activeMembers.Count + activeGuests.Count;
 
-                // 2. รายได้ที่ควรจะได้ (Expected) = จำนวนผู้เล่น * (ค่าคอร์ท + ค่าลูก)
-                // นับเฉพาะคนที่ Status = 1 (Joined)
-                int memberCount = s.SessionParticipants.Count(p => p.Status == 1);
-                int guestCount = s.SessionWalkinGuests.Count(g => g.Status == 1);
-                int totalPlayers = memberCount + guestCount;
+                decimal courtFeePerPerson = s.CourtFeePerPerson ?? 0;
+                decimal shuttleFeePerPerson = s.ShuttlecockFeePerPerson ?? 0;
+
+                int CountGames(int? userId, int? walkinId)
+                {
+                    return s.Matches.Count(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId && mp.WalkinId == walkinId));
+                }
+
+                (decimal paid, decimal total) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
+                {
+                    decimal cPart = courtFeePerPerson;
+                    decimal sPart = s.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
+
+                    var bills = s.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
+                    decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
+                    
+                    decimal totalVal = 0;
+                    if (paidVal > 0 || bills.Any(b => b.Status == 1))
+                    {
+                        totalVal = bills.Sum(b => b.TotalAmount);
+                    }
+                    else
+                    {
+                        decimal expectedTotal = cPart + sPart + serviceFee;
+                        totalVal = expectedTotal;
+                    }
+
+                    decimal actualServiceFee = serviceFee;
+                    if (bills.Any())
+                    {
+                        var serviceFeeItem = bills.SelectMany(b => b.BillLineItems).FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                        if (serviceFeeItem != null) actualServiceFee = serviceFeeItem.Amount;
+                        else if (totalVal > 0 && totalVal < serviceFee) actualServiceFee = totalVal;
+                        else if (totalVal == 0) actualServiceFee = 0;
+                    }
+                    else if (totalVal == 0) actualServiceFee = 0;
+
+                    decimal netTotal = (totalVal - actualServiceFee) > 0 ? (totalVal - actualServiceFee) : 0;
+                    decimal netPaid = (paidVal >= actualServiceFee) ? (paidVal - actualServiceFee) : 0;
+
+                    return (netPaid, netTotal);
+                }
+
+                decimal aggTotalIncome = 0;
+                decimal aggPaidAmount = 0;
+                decimal aggUnpaidAmount = 0;
+
+                foreach (var m in activeMembers)
+                {
+                    int games = CountGames(m.UserId, null);
+                    var (paid, total) = CalculateParticipantFinancials(m.UserId, null, games);
+                    aggTotalIncome += total;
+                    aggPaidAmount += paid;
+                    aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
+                }
+
+                foreach (var g in activeGuests)
+                {
+                    int games = CountGames(null, g.WalkinId);
+                    var (paid, total) = CalculateParticipantFinancials(null, g.WalkinId, games);
+                    aggTotalIncome += total;
+                    aggPaidAmount += paid;
+                    aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
+                }
 
                 decimal feePerPerson = (s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0);
-                decimal expectedIncome = totalPlayers * feePerPerson;
-
-                // 3. ค้างจ่าย (Unpaid)
-                // กรณีที่เก็บเงินได้น้อยกว่าที่ควรจะได้ (หรืออาจจะใช้ Logic ว่าใครยังไม่มีบิลก็ได้ แต่วิธีนี้ง่ายกว่าสำหรับภาพรวม)
-                decimal unpaidAmount = expectedIncome - paidAmount;
-                if (unpaidAmount < 0) unpaidAmount = 0; // ป้องกันติดลบกรณีเก็บเกินหรือทิป
 
                 result.Add(new OrganizerGameSessionDto
                 {
                     GameSessionId = s.SessionId,
                     Date = s.SessionDate.ToDateTime(s.StartTime),
                     GroupName = s.GroupName,
-                    TotalIncome = expectedIncome, // รายได้รวมที่ควรจะได้
-                    PaidAmount = paidAmount,      // จ่ายแล้ว
-                    UnpaidAmount = unpaidAmount,  // ค้างจ่าย
-                    Status = s.Status == 3 ? "Cancelled" : (s.Status == 2 ? "Started" : "Open"),
+                    TotalIncome = aggTotalIncome,
+                    PaidAmount = aggPaidAmount,
+                    UnpaidAmount = aggUnpaidAmount,
+                    Status = s.Status == 3 ? "Cancelled" : (s.Status == 4 || s.SessionDate < today ? "Ended" : (s.Status == 2 ? "Started" : "Open")),
                     StartTime = s.StartTime.ToString("HH:mm"),
                     EndTime = s.EndTime.ToString("HH:mm"),
                     TotalParticipants = totalPlayers,
@@ -1149,6 +1204,12 @@ namespace DropInBadAPI.Service.Mobile.Game
             decimal aggPaidAmount = 0;
             decimal aggUnpaidAmount = 0;
 
+            // --- NEW: ตัวแปรสำหรับยอดสุทธิ (Net) ---
+            decimal aggNetTotalIncome = 0;
+            decimal aggNetPaidAmount = 0;
+            decimal aggNetUnpaidAmount = 0;
+            decimal aggTotalServiceFee = 0;
+
             // --- NEW: ตัวแปรสำหรับสรุปยอดละเอียด ---
             int countPaidCourt = 0;
             int countUnpaidCourt = 0;
@@ -1164,7 +1225,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             var participantDtos = new List<ParticipantFinancialDto>();
 
             // Helper ใหม่: คำนวณยอดเงินรายคนและแยกส่วนประกอบ
-            (decimal paid, decimal total, decimal courtPart, decimal shuttlePart) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
+            (decimal paid, decimal total, decimal courtPart, decimal shuttlePart, decimal srvFee, decimal netTotal, decimal netPaid, decimal netUnpaid) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
             {
                 // 1. คำนวณค่าใช้จ่ายมาตรฐาน
                 decimal cPart = courtFeePerPerson;
@@ -1183,17 +1244,9 @@ namespace DropInBadAPI.Service.Mobile.Game
                 decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
 
                 decimal totalVal = 0;
-                if (paidVal > 0)
+                if (paidVal > 0 || bills.Any(b => b.Status == 1))
                 {
-                    // --- NEW: If paid, check if court fee was part of the payment ---
-                    bool courtFeeAlreadyPaid = bills.Any(b => b.Status == 2 && b.BillLineItems.Any(li => li.Description == "ค่าคอร์ท"));
-                    if (courtFeeAlreadyPaid)
-                    {
-                        // If court fee was paid, don't add it again to the total cost for display.
-                        // Just calculate the shuttle fee.
-                        totalVal = sPart;
-                    }
-                    // ถ้าจ่ายแล้ว ให้ใช้ยอดจากบิล (เพราะอาจมีการแก้ราคา)
+                    // ถ้ายอดมีการสร้างบิลแล้ว (จ่ายแล้ว หรือ รอจ่าย) ให้ใช้ยอดจากบิล
                     totalVal = bills.Sum(b => b.TotalAmount);
                 }
                 else
@@ -1202,7 +1255,29 @@ namespace DropInBadAPI.Service.Mobile.Game
                     totalVal = cPart + sPart + serviceFee; 
                 }
 
-                return (paidVal, totalVal, cPart, sPart);
+                // --- NEW: คำนวณยอดสุทธิ (Net) ที่ผู้จัดได้รับจริง ---
+                decimal actualServiceFee = serviceFee;
+                if (bills.Any())
+                {
+                    var serviceFeeItem = bills.SelectMany(b => b.BillLineItems).FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                    if (serviceFeeItem != null) {
+                        actualServiceFee = serviceFeeItem.Amount;
+                    } else if (totalVal > 0 && totalVal < serviceFee) {
+                        actualServiceFee = totalVal; 
+                    } else if (totalVal == 0) {
+                        actualServiceFee = 0;
+                    }
+                }
+                else if (totalVal == 0)
+                {
+                    actualServiceFee = 0;
+                }
+
+                decimal netT = (totalVal - actualServiceFee) > 0 ? (totalVal - actualServiceFee) : 0;
+                decimal netP = (paidVal >= actualServiceFee) ? (paidVal - actualServiceFee) : 0;
+                decimal netU = (netT - netP) > 0 ? (netT - netP) : 0;
+
+                return (paidVal, totalVal, cPart, sPart, actualServiceFee, netT, netP, netU);
             }
 
             // Helper สำหรับคำนวณสัดส่วนการจ่าย (Ratio Logic ย้ายมาจาก Frontend)
@@ -1235,7 +1310,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             foreach (var m in activeMembers)
             {
                 int games = CountGames(m.UserId, null);
-                var (paid, total, cPart, sPart) = CalculateParticipantFinancials(m.UserId, null, games);
+                var (paid, total, cPart, sPart, srvFee, netTotal, netPaid, netUnpaid) = CalculateParticipantFinancials(m.UserId, null, games);
                 
                 // สะสมยอดรวม
                 aggTotalCourtIncome += cPart;
@@ -1243,6 +1318,11 @@ namespace DropInBadAPI.Service.Mobile.Game
                 aggTotalIncome += total;
                 aggPaidAmount += paid;
                 aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
+
+                aggNetTotalIncome += netTotal;
+                aggNetPaidAmount += netPaid;
+                aggNetUnpaidAmount += netUnpaid;
+                aggTotalServiceFee += srvFee;
 
                 CalculateBreakdown(total, paid, cPart, sPart);
 
@@ -1257,14 +1337,18 @@ namespace DropInBadAPI.Service.Mobile.Game
                     PaidAmount = paid,
                     UnpaidAmount = total - paid > 0 ? total - paid : 0,
                     CourtFee = cPart,   // ส่งค่าสนามที่คำนวณจาก API
-                    ShuttleFee = sPart  // ส่งค่าลูกแบดที่คำนวณจาก API
+                    ShuttleFee = sPart,  // ส่งค่าลูกแบดที่คำนวณจาก API
+                    ServiceFee = srvFee,
+                    OrganizerNetTotal = netTotal,
+                    OrganizerNetPaid = netPaid,
+                    OrganizerNetUnpaid = netUnpaid
                 });
             }
 
             foreach (var g in activeGuests)
             {
                 int games = CountGames(null, g.WalkinId);
-                var (paid, total, cPart, sPart) = CalculateParticipantFinancials(null, g.WalkinId, games);
+                var (paid, total, cPart, sPart, srvFee, netTotal, netPaid, netUnpaid) = CalculateParticipantFinancials(null, g.WalkinId, games);
 
                 // สะสมยอดรวม
                 aggTotalCourtIncome += cPart;
@@ -1272,6 +1356,11 @@ namespace DropInBadAPI.Service.Mobile.Game
                 aggTotalIncome += total;
                 aggPaidAmount += paid;
                 aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
+
+                aggNetTotalIncome += netTotal;
+                aggNetPaidAmount += netPaid;
+                aggNetUnpaidAmount += netUnpaid;
+                aggTotalServiceFee += srvFee;
 
                 CalculateBreakdown(total, paid, cPart, sPart);
 
@@ -1286,7 +1375,11 @@ namespace DropInBadAPI.Service.Mobile.Game
                     PaidAmount = paid,
                     UnpaidAmount = total - paid > 0 ? total - paid : 0,
                     CourtFee = cPart,   // ส่งค่าสนามที่คำนวณจาก API
-                    ShuttleFee = sPart  // ส่งค่าลูกแบดที่คำนวณจาก API
+                    ShuttleFee = sPart,  // ส่งค่าลูกแบดที่คำนวณจาก API
+                    ServiceFee = srvFee,
+                    OrganizerNetTotal = netTotal,
+                    OrganizerNetPaid = netPaid,
+                    OrganizerNetUnpaid = netUnpaid
                 });
             }
 
@@ -1329,7 +1422,11 @@ namespace DropInBadAPI.Service.Mobile.Game
                 PaidShuttleAmount = sumPaidShuttle,
                 UnpaidShuttleAmount = sumUnpaidShuttle,
                 TotalAdditions = sumAdditions,
-                TotalSubtractions = sumSubtractions
+                TotalSubtractions = sumSubtractions,
+                TotalServiceFeeDeducted = aggTotalServiceFee,
+                OrganizerNetTotalIncome = aggNetTotalIncome,
+                OrganizerNetPaidAmount = aggNetPaidAmount,
+                OrganizerNetUnpaidAmount = aggNetUnpaidAmount
             };
         }
 
@@ -1539,8 +1636,36 @@ namespace DropInBadAPI.Service.Mobile.Game
 
             if (dto.IsMixedMode)
             {
-                // โหมดผสม (Mixed): เอา 4 คนแรกตามคิว (มีทั้งเก่งและอ่อนปนกัน)
-                selectedPlayers = baseSortedPlayers.Take(4).ToList();
+                // โหมดผสม (Mixed): แก้ไขใหม่ - เพิ่มความหลากหลายเพื่อไม่ให้เจอแต่คนเดิมๆ
+                var firstPlayer = baseSortedPlayers.First();
+                selectedPlayers.Add(firstPlayer);
+
+                // หาประวัติแมตช์ที่ firstPlayer เคยเล่น
+                var firstPlayerMatches = session.Matches
+                    .Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => 
+                        (firstPlayer.UserId.HasValue && mp.UserId == firstPlayer.UserId.Value) ||
+                        (firstPlayer.WalkinId.HasValue && mp.WalkinId == firstPlayer.WalkinId.Value)))
+                    .ToList();
+
+                var playedWithFirstPlayerCount = new Dictionary<string, int>();
+                foreach (var rp in baseSortedPlayers.Skip(1))
+                {
+                    string rpKey = $"{rp.Type}_{rp.Id}";
+                    int count = firstPlayerMatches.Count(m => m.MatchPlayers.Any(mp => 
+                        (rp.UserId.HasValue && mp.UserId == rp.UserId.Value) ||
+                        (rp.WalkinId.HasValue && mp.WalkinId == rp.WalkinId.Value)));
+                    playedWithFirstPlayerCount[rpKey] = count;
+                }
+
+                var remainingPlayers = baseSortedPlayers.Skip(1)
+                    .OrderBy(p => p.Games) // 1. ต้องให้ความสำคัญกับจำนวนเกมที่เล่นน้อยที่สุดก่อนเป็นอันดับแรก!
+                    .ThenBy(p => playedWithFirstPlayerCount[$"{p.Type}_{p.Id}"]) // 2. คนที่เคยเล่นด้วยกันน้อยที่สุด (เพิ่มความหลากหลาย)
+                    .ThenBy(p => Math.Abs(p.Skill - firstPlayer.Skill)) // 3. ฝีมือใกล้เคียงกัน
+                    .ThenBy(p => p.Wait)
+                    .Take(3)
+                    .ToList();
+
+                selectedPlayers.AddRange(remainingPlayers);
             }
             else
             {
@@ -1563,8 +1688,25 @@ namespace DropInBadAPI.Service.Mobile.Game
 
                 if (bestGroup != null)
                 {
-                    // Found a group of 4+ with the same skill. Take the first 4 from that group.
-                    selectedPlayers = bestGroup.Players.Take(4).ToList();
+                    // เพื่อความหลากหลายในกลุ่มฝีมือเดียวกัน ถ้ามีมากกว่า 4 คน ให้เรียงกระจายคนเล่นซ้ำออกไป
+                    var firstInGroup = bestGroup.Players.First();
+                    selectedPlayers.Add(firstInGroup);
+
+                    var firstPlayerMatches = session.Matches
+                        .Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => 
+                            (firstInGroup.UserId.HasValue && mp.UserId == firstInGroup.UserId.Value) ||
+                            (firstInGroup.WalkinId.HasValue && mp.WalkinId == firstInGroup.WalkinId.Value)))
+                        .ToList();
+
+                    var remainingInGroup = bestGroup.Players.Skip(1)
+                        .OrderBy(p => p.Games)
+                        .ThenBy(rp => firstPlayerMatches.Count(m => m.MatchPlayers.Any(mp => 
+                            (rp.UserId.HasValue && mp.UserId == rp.UserId.Value) ||
+                            (rp.WalkinId.HasValue && mp.WalkinId == rp.WalkinId.Value))))
+                        .ThenBy(p => p.Wait)
+                        .Take(3).ToList();
+                    
+                    selectedPlayers.AddRange(remainingInGroup);
                 }
                 else
                 {
@@ -1573,8 +1715,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                     selectedPlayers.Add(firstPlayer);
 
                     var remainingPlayers = baseSortedPlayers.Skip(1)
-                        .OrderBy(p => Math.Abs(p.Skill - firstPlayer.Skill))
-                        .ThenBy(p => p.Games)
+                        .OrderBy(p => p.Games) // FIX: ต้องเอาจำนวนเกมขึ้นก่อน
+                        .ThenBy(p => Math.Abs(p.Skill - firstPlayer.Skill))
                         .ThenBy(p => p.Wait)
                         .Take(3)
                         .ToList();

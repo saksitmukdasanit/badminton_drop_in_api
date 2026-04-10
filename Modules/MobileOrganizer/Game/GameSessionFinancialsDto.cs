@@ -12,5 +12,11 @@ namespace DropInBadAPI.Dtos
         public decimal UnpaidAmount { get; set; }
         public decimal CourtFee { get; set; }
         public decimal ShuttleFee { get; set; }
+
+        // --- NEW: ยอดสุทธิสำหรับผู้จัดรายคน ---
+        public decimal ServiceFee { get; set; }
+        public decimal OrganizerNetTotal { get; set; }
+        public decimal OrganizerNetPaid { get; set; }
+        public decimal OrganizerNetUnpaid { get; set; }
     }
 }

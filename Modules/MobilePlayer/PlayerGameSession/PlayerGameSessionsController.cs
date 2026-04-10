@@ -92,9 +92,9 @@ namespace DropInBadAPI.Controllers.MobilePlayer
         }
 
         [HttpPost("{id}/join")]
-        public async Task<ActionResult<Response<JoinSessionResponseDto>>> JoinSession(int id)
+        public async Task<ActionResult<Response<JoinSessionResponseDto>>> JoinSession(int id, [FromBody] PlayerJoinSessionRequestDto dto)
         {
-            var (data, errorMessage) = await _playerSessionService.JoinSessionAsync(id, GetCurrentUserId());
+            var (data, errorMessage) = await _playerSessionService.JoinSessionAsync(id, GetCurrentUserId(), dto);
             if (data == null)
             {
                 return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
@@ -163,6 +163,14 @@ namespace DropInBadAPI.Controllers.MobilePlayer
             }
             
             return Ok(new Response<object> { Status = 200, Message = errorMessage });
+        }
+
+        [HttpPost("{id}/toggle-pause")]
+        public async Task<ActionResult<Response<object>>> TogglePause(int id, [FromBody] TogglePauseRequestDto dto)
+        {
+            var (success, errorMessage) = await _playerSessionService.TogglePauseAsync(id, GetCurrentUserId(), dto.IsPaused);
+            if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            return Ok(new Response<object> { Status = 200, Message = "Pause state updated." });
         }
     }
 }

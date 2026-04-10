@@ -184,6 +184,12 @@ namespace DropInBadAPI.Dtos
         public decimal TotalAdditions { get; set; }
         public decimal TotalSubtractions { get; set; }
 
+        // --- NEW: สรุปยอดสุทธิสำหรับผู้จัด (Net Income) ---
+        public decimal TotalServiceFeeDeducted { get; set; }
+        public decimal OrganizerNetTotalIncome { get; set; }
+        public decimal OrganizerNetPaidAmount { get; set; }
+        public decimal OrganizerNetUnpaidAmount { get; set; }
+
         public List<ParticipantFinancialDto> Participants { get; set; } = new();
     }
 

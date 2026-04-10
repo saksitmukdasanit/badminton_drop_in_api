@@ -81,6 +81,7 @@ namespace DropInBadAPI.Services
                             UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไปเพื่อให้ ID ตรงกับตอน Waiting
                             WalkinId = p.WalkinId,
                             Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                             GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                             SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
                             SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
@@ -97,6 +98,7 @@ namespace DropInBadAPI.Services
                             UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
                             WalkinId = p.WalkinId,
                             Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                             GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                             SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
                             SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
@@ -344,6 +346,7 @@ namespace DropInBadAPI.Services
                     {
                         UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
                         Nickname = p.User?.UserProfile?.Nickname ?? "N/A",
+                        ProfilePhotoUrl = p.User?.UserProfile?.ProfilePhotoUrl,
                         GenderName = p.User?.UserProfile?.Gender == 1 ? "ชาย" : p.User?.UserProfile?.Gender == 2 ? "หญิง" : "อื่นๆ",
                         SkillLevelId = sessionParticipant?.SkillLevelId,
                         SkillLevelName = sessionParticipant?.SkillLevel?.LevelName,
@@ -468,27 +471,6 @@ namespace DropInBadAPI.Services
                     return null;
                 }
 
-                // --- NEW: ถ้าเป็น Preview ให้ลองดึงบิลล่าสุดที่ยังไม่ยกเลิกมาแสดงก่อน (เพื่อให้เห็นยอดอื่นๆ ที่บันทึกไว้) ---
-                if (isPreview)
-                {
-                    var existingBill = await _context.ParticipantBills
-                        .Include(b => b.BillLineItems)
-                        .Where(b => b.SessionId == session.SessionId &&
-                                    ((userId != null && b.UserId == userId) || (walkinId != null && b.WalkinId == walkinId)) &&
-                                    b.Status != 3) // 3 = Cancelled
-                        .OrderByDescending(b => b.CreatedDate)
-                        .FirstOrDefaultAsync();
-
-                    if (existingBill != null)
-                    {
-                        return new BillSummaryDto
-                        {
-                            BillId = existingBill.BillId,
-                            TotalAmount = existingBill.TotalAmount,
-                            LineItems = existingBill.BillLineItems.Select(li => new BillLineItemDto { Description = li.Description, Amount = li.Amount }).ToList()
-                        };
-                    }
-                }
 
                 // --- NEW: ดึงข้อมูลแมตช์ที่เล่นจบแล้วเพื่อคำนวณค่าใช้จ่ายตามจริง ---
                 var matchesPlayed = await _context.Matches
@@ -503,11 +485,19 @@ namespace DropInBadAPI.Services
                     var lineItems = new List<BillLineItem>();
                     decimal totalAmount = 0;
 
-                    // --- LOGIC ใหม่: ถ้ามีข้อมูลจากหน้าบ้าน (customCheckout) ให้ใช้ข้อมูลนั้นเลย ---
+                    // ดึงประวัติบิลที่ชำระเงินแล้วเพื่อหักลบกลบยอด
+                    var pastBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                        .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 2).ToListAsync();
+
+                    bool courtPaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าคอร์ท" || li.Description == "ค่าสนาม"));
+                    bool servicePaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าธรรมเนียม"));
+
                     if (customCheckout != null && customCheckout.CustomLineItems != null && customCheckout.CustomLineItems.Any())
                     {
                         foreach (var item in customCheckout.CustomLineItems)
                         {
+                            if (courtPaid && (item.Description == "ค่าคอร์ท" || item.Description == "ค่าสนาม")) continue;
+                            if (servicePaid && item.Description == "ค่าธรรมเนียม") continue;
                             lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                             totalAmount += item.Amount;
                         }
@@ -515,26 +505,28 @@ namespace DropInBadAPI.Services
                     else
                     {
                         // --- LOGIC เดิม: คำนวณที่ Server (Fallback) ---
-                        if (session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
+                        if (!courtPaid && session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
                         {
-                            var amount = session.CourtFeePerPerson.Value;
-                            lineItems.Add(new BillLineItem { Description = "ค่าคอร์ท", Amount = amount });
-                            totalAmount += amount;
+                            lineItems.Add(new BillLineItem { Description = "ค่าสนาม", Amount = session.CourtFeePerPerson.Value });
+                            totalAmount += session.CourtFeePerPerson.Value;
                         }
 
-                        // เพิ่มค่าธรรมเนียม (Service Fee)
-                        decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
-                        lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
-                        totalAmount += serviceFee;
+                        if (!servicePaid)
+                        {
+                            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                            if (serviceFee > 0)
+                            {
+                                lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                                totalAmount += serviceFee;
+                            }
+                        }
 
-                        // ตรวจสอบ CostingMethod
+                        decimal shuttleTotal = 0;
                         bool isBuffet = session.CostingMethod == 2;
 
                         if (isBuffet && session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
                         {
-                            var amount = session.ShuttlecockFeePerPerson.Value;
-                            lineItems.Add(new BillLineItem { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = amount });
-                            totalAmount += amount;
+                            shuttleTotal = session.ShuttlecockFeePerPerson.Value;
                         }
                         else if (session.ShuttlecockCostPerUnit.HasValue && session.ShuttlecockCostPerUnit > 0)
                         {
@@ -549,20 +541,63 @@ namespace DropInBadAPI.Services
                                 }
                             }
                             
-                            shuttleCost = Math.Ceiling(shuttleCost);
-                            if (shuttleCost > 0)
-                            {
-                                lineItems.Add(new BillLineItem { Description = $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = shuttleCost });
-                                totalAmount += shuttleCost;
-                            }
+                            shuttleTotal = Math.Ceiling(shuttleCost);
                         }
                         // --- NEW: เพิ่ม Logic สำหรับคิดค่าลูกแบดแบบ "ต่อคนต่อเกม" (CostingMethod = 1 หรือ null) ---
                         else if (session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
                         {
                             // คิดตามจำนวนเกมที่เล่นจริง
-                            decimal shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed.Count;
-                            lineItems.Add(new BillLineItem { Description = $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = shuttleTotal });
-                            totalAmount += shuttleTotal;
+                            shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed.Count;
+                        }
+
+                        decimal paidShuttle = pastBills
+                            .SelectMany(b => b.BillLineItems)
+                            .Where(li => li.Description.StartsWith("ค่าลูกแบด"))
+                            .Sum(li => li.Amount);
+
+                        decimal dueShuttle = shuttleTotal - paidShuttle;
+                        if (dueShuttle > 0)
+                        {
+                            lineItems.Add(new BillLineItem { Description = isBuffet ? "ค่าลูกแบด (เหมาจ่าย)" : $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = dueShuttle });
+                            totalAmount += dueShuttle;
+                        }
+
+                        if (isPreview)
+                        {
+                            // --- FIX: โหมด Preview (ดูประวัติ) ให้ดึงรายการ Custom ทุกบิลที่ยังไม่ถูกยกเลิก (ทั้งจ่ายแล้วและยังไม่จ่าย) มาแสดงด้วย ---
+                            var allBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                                .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status != 3) // ไม่เอา Cancelled
+                                .ToListAsync();
+
+                            var allCustomItems = allBills.SelectMany(b => b.BillLineItems)
+                                .Where(li => li.Description != "ค่าคอร์ท" && li.Description != "ค่าสนาม" && 
+                                             li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
+
+                            foreach(var item in allCustomItems)
+                            {
+                                lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                                totalAmount += item.Amount;
+                            }
+                        }
+                        else
+                        {
+                            // --- โหมดคิดเงินจริง: ดึงเฉพาะ Custom Item จากบิลที่ "ค้างชำระ" มาคิดยอดเหมือนเดิม ---
+                            var pendingBill = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                                .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 1) // 1 = Pending
+                                .OrderByDescending(b => b.CreatedDate)
+                                .FirstOrDefaultAsync();
+
+                            if (pendingBill != null)
+                            {
+                                var customItems = pendingBill.BillLineItems.Where(li => 
+                                    li.Description != "ค่าคอร์ท" && li.Description != "ค่าสนาม" && 
+                                    li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
+                                foreach(var item in customItems)
+                                {
+                                    lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                                    totalAmount += item.Amount;
+                                }
+                            }
                         }
                     }
 
@@ -584,7 +619,7 @@ namespace DropInBadAPI.Services
                         UserId = userId,
                         WalkinId = walkinId,
                         TotalAmount = totalAmount,
-                        Status = 1,
+                        Status = (byte)(totalAmount <= 0 ? 2 : 1), // ถ้า 0 บาท ให้ถือว่าจ่ายแล้ว
                         CreatedDate = DateTime.UtcNow
                     };
                     await _context.ParticipantBills.AddAsync(newBill);
@@ -670,6 +705,12 @@ namespace DropInBadAPI.Services
 
                     participant.CheckinTime = DateTime.UtcNow;
                     await _context.SaveChangesAsync();
+
+                    // 1. อัปเดตกระดาน (Live State) ให้คนอื่นๆ ในก๊วนเห็น
+                    await BroadcastLiveStateChange(sessionId, organizerUserId);
+                    // 2. ส่ง Event เฉพาะกิจบอกแอปฝั่งผู้เล่นให้รู้ตัวว่าเช็คอินแล้ว
+                    await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("PlayerCheckedIn", participant.UserId);
+
                     return (true, "Member checked in successfully.");
                 }
                 else if (dto.ParticipantType.Equals("Guest", StringComparison.OrdinalIgnoreCase))
@@ -680,6 +721,9 @@ namespace DropInBadAPI.Services
 
                     guest.CheckinTime = DateTime.UtcNow;
                     await _context.SaveChangesAsync();
+
+                    // แขก Walk-in ไม่มีแอปของตัวเอง อัปเดตแค่กระดานพอ
+                    await BroadcastLiveStateChange(sessionId, organizerUserId);
                     return (true, "Guest checked in successfully.");
                 }
                 else
@@ -689,7 +733,13 @@ namespace DropInBadAPI.Services
             }
             else if (!string.IsNullOrEmpty(dto.ScannedData))
             {
-                var user = await _context.Users.FirstOrDefaultAsync(u => u.UserPublicId.ToString() == dto.ScannedData);
+                // ตรวจสอบว่าสิ่งที่สแกนมาเป็นตัวเลข (UserId) หรือไม่
+                bool isNumeric = int.TryParse(dto.ScannedData, out int scannedUserId);
+
+                var user = await _context.Users.FirstOrDefaultAsync(u => 
+                    u.UserPublicId.ToString() == dto.ScannedData || 
+                    (isNumeric && u.UserId == scannedUserId));
+
                 if (user == null) return (false, "User not found from QR code.");
 
                 var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == user.UserId);
@@ -698,6 +748,12 @@ namespace DropInBadAPI.Services
 
                 participant.CheckinTime = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
+
+                // 1. อัปเดตกระดาน (Live State) 
+                await BroadcastLiveStateChange(sessionId, organizerUserId);
+                // 2. ส่ง Event บังคับเด้งหน้าจอให้แอปผู้เล่น
+                await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("PlayerCheckedIn", user.UserId);
+
                 return (true, "Check-in successful.");
             }
 
@@ -920,13 +976,15 @@ namespace DropInBadAPI.Services
                     {
                         UserId = teammate.UserId,
                         WalkinId = teammate.WalkinId,
-                        Nickname = teammate.UserId.HasValue ? teammate.User?.UserProfile?.Nickname ?? "N/A" : teammate.Walkin?.GuestName ?? "N/A"
+                        Nickname = teammate.UserId.HasValue ? teammate.User?.UserProfile?.Nickname ?? "N/A" : teammate.Walkin?.GuestName ?? "N/A",
+                        ProfilePhotoUrl = teammate.UserId.HasValue ? teammate.User?.UserProfile?.ProfilePhotoUrl : null
                     } : new PlayerInMatchDto { Nickname = "N/A" },
                     Opponents = opponents.Select(o => new PlayerInMatchDto
                     {
                         UserId = o.UserId,
                         WalkinId = o.WalkinId,
-                        Nickname = o.UserId.HasValue ? o.User?.UserProfile?.Nickname ?? "N/A" : o.Walkin?.GuestName ?? "N/A"
+                        Nickname = o.UserId.HasValue ? o.User?.UserProfile?.Nickname ?? "N/A" : o.Walkin?.GuestName ?? "N/A",
+                        ProfilePhotoUrl = o.UserId.HasValue ? o.User?.UserProfile?.ProfilePhotoUrl : null
                     }).ToList()
                 };
 
@@ -1287,6 +1345,7 @@ namespace DropInBadAPI.Services
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId, 
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                     GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                     SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevelId : p.Walkin?.SkillLevelId,
                     SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
@@ -1299,6 +1358,7 @@ namespace DropInBadAPI.Services
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
                     WalkinId = p.WalkinId, 
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
+                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                     GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
                     SkillLevelId = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevelId : p.Walkin?.SkillLevelId,
                     SkillLevelName = p.UserId.HasValue ? p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,

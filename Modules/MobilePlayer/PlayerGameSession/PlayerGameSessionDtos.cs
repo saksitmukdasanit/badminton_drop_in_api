@@ -35,6 +35,19 @@ namespace DropInBadAPI.Dtos
         public string CurrentUserStatus { get; set; }
     }
 
+    public class PlayerJoinSessionRequestDto
+    {
+        public string PaymentMethod { get; set; } = string.Empty;
+        public bool AutoPromote { get; set; }
+        // Optional: Credit card details if method is Credit Card
+        public string? CardNumber { get; set; }
+        public string? CardName { get; set; }
+        public string? ExpiryMonth { get; set; }
+        public string? ExpiryYear { get; set; }
+        public string? Cvv { get; set; }
+        public bool? SaveCard { get; set; }
+    }
+
 
     public class OrganizerInfoDto
     {
@@ -73,11 +86,10 @@ namespace DropInBadAPI.Dtos
         public class HistoryPaymentDto
         {
             public string Status { get; set; } = string.Empty;
-            public decimal CourtFee { get; set; }
-            public decimal ServiceFee { get; set; }
             public decimal TotalAmount { get; set; }
             public string? PaymentDate { get; set; }
             public string? PaymentMethod { get; set; }
+            public List<CustomLineItemDto> LineItems { get; set; } = new();
         }
 
         public class HistoryMatchDto
@@ -135,5 +147,10 @@ namespace DropInBadAPI.Dtos
         public string PaymentMethod { get; set; } = string.Empty;
         public decimal Amount { get; set; }
         public List<CustomLineItemDto>? CustomItems { get; set; }
+    }
+
+    public class TogglePauseRequestDto
+    {
+        public bool IsPaused { get; set; }
     }
 }
