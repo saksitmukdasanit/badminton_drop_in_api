@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
@@ -34,6 +34,8 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<MatchPlayer> MatchPlayers { get; set; }
 
+    public virtual DbSet<Notification> Notifications { get; set; }
+
     public virtual DbSet<OrganizerProfile> OrganizerProfiles { get; set; }
 
     public virtual DbSet<UserOrganizerSkill> UserOrganizerSkills { get; set; }
@@ -41,6 +43,10 @@ public partial class BadmintonDbContext : DbContext
     public virtual DbSet<OrganizerSkillLevel> OrganizerSkillLevels { get; set; }
 
     public virtual DbSet<PairingMethod> PairingMethods { get; set; }
+
+    public virtual DbSet<UserBookmarkedSession> UserBookmarkedSessions { get; set; }
+
+    public virtual DbSet<UserFollow> UserFollows { get; set; }
 
     public virtual DbSet<ParticipantBill> ParticipantBills { get; set; }
 
@@ -536,6 +542,62 @@ public partial class BadmintonDbContext : DbContext
             entity.Property(e => e.Latitude).HasPrecision(9, 6);
             entity.Property(e => e.Longitude).HasPrecision(9, 6);
             entity.Property(e => e.VenueName).HasMaxLength(255);
+        });
+
+        modelBuilder.Entity<Notification>(entity =>
+        {
+            entity.HasKey(e => e.NotificationId).HasName("Notifications_pkey");
+
+            entity.HasIndex(e => e.UserId, "IX_Notifications_UserID");
+
+            entity.Property(e => e.NotificationId).HasColumnName("NotificationID");
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+            entity.Property(e => e.IsRead).HasDefaultValue(false);
+            entity.Property(e => e.Message);
+            entity.Property(e => e.ReferenceId).HasColumnName("ReferenceID");
+            entity.Property(e => e.Title).HasMaxLength(255);
+            entity.Property(e => e.Type).HasMaxLength(50);
+            entity.Property(e => e.UserId).HasColumnName("UserID");
+
+            entity.HasOne(d => d.User).WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_Notifications_Users");
+        });
+
+        modelBuilder.Entity<UserBookmarkedSession>(entity =>
+        {
+            entity.HasKey(e => new { e.UserId, e.SessionId }).HasName("UserBookmarkedSessions_pkey");
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.User).WithMany()
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserBookmarkedSessions_UserID");
+
+            entity.HasOne(d => d.Session).WithMany()
+                .HasForeignKey(d => d.SessionId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserBookmarkedSessions_SessionID");
+        });
+
+        modelBuilder.Entity<UserFollow>(entity =>
+        {
+            entity.HasKey(e => new { e.FollowerId, e.OrganizerId }).HasName("UserFollows_pkey");
+
+            entity.HasIndex(e => e.OrganizerId, "IX_UserFollows_OrganizerId");
+
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Follower).WithMany()
+                .HasForeignKey(d => d.FollowerId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserFollows_Follower");
+
+            entity.HasOne(d => d.Organizer).WithMany()
+                .HasForeignKey(d => d.OrganizerId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserFollows_Organizer");
         });
 
         OnModelCreatingPartial(modelBuilder);

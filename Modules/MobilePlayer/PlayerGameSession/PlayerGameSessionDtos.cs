@@ -56,6 +56,15 @@ namespace DropInBadAPI.Dtos
         public string? ProfilePhotoUrl { get; set; }
     }
 
+    public class OrganizerSummaryDto
+    {
+        public int OrganizerId { get; set; }
+        public string Nickname { get; set; } = string.Empty;
+        public string? ProfilePhotoUrl { get; set; }
+        public int TotalHosted { get; set; }
+        public int TotalCancelled { get; set; }
+        public bool IsFollowed { get; set; }
+    }
 
     public record JoinSessionResponseDto
     {

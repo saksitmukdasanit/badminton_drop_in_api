@@ -4,7 +4,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 {
     public interface IPlayerGameSessionService
     {
-        Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int page = 1, int limit = 10);
+        Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int? organizerId = null, List<DayOfWeek>? daysOfWeek = null, List<int>? gameTypeIds = null, int page = 1, int limit = 10);
         Task<MyGameSessionsResponseDto> GetMySessionsAsync(int userId);
         Task<IEnumerable<UpcomingSessionCardDto>> GetHistorySessionsAsync(int userId, string? keyword = null, string? sortBy = null, int page = 1, int limit = 10);
         Task<PlayerGameSessionViewDto?> GetSessionForPlayerViewAsync(int sessionId, int? currentUserId);
@@ -17,5 +17,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         Task<(bool Success, string ErrorMessage)> SubmitMatchResultAsync(int matchId, int userId, SubmitMatchResultDto dto);
         Task<(bool Success, string ErrorMessage)> CheckoutAndPayAsync(int sessionId, int userId, PlayerPaymentRequestDto dto);
         Task<(bool Success, string ErrorMessage)> TogglePauseAsync(int sessionId, int userId, bool isPaused);
+        Task<(bool Success, string ErrorMessage)> ToggleBookmarkAsync(int sessionId, int userId, bool isBookmark);
+        Task<OrganizerSummaryDto?> GetOrganizerSummaryAsync(int organizerId, int? currentUserId);
+        Task<IEnumerable<UpcomingSessionCardDto>> GetBookmarkedSessionsAsync(int userId);
     }
 }

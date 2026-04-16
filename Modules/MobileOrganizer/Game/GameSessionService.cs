@@ -16,13 +16,15 @@ namespace DropInBadAPI.Service.Mobile.Game
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IMatchManagementService _matchManagementService;
         private readonly IConfiguration _configuration;
+        private readonly INotificationService _notificationService;
 
-        public GameSessionService(BadmintonDbContext context, IHubContext<ManagementGameHub> hubContext, IMatchManagementService matchManagementService, IConfiguration configuration)
+        public GameSessionService(BadmintonDbContext context, IHubContext<ManagementGameHub> hubContext, IMatchManagementService matchManagementService, IConfiguration configuration, INotificationService notificationService)
         {
             _context = context;
             _hubContext = hubContext;
             _matchManagementService = matchManagementService;
             _configuration = configuration;
+            _notificationService = notificationService;
         }
 
         public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto)
@@ -97,6 +99,14 @@ namespace DropInBadAPI.Service.Mobile.Game
 
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
+
+                    // --- แจ้งเตือนผู้ติดตาม (Followers) ของผู้จัดเกี่ยวกับก๊วนใหม่ ---
+                    var organizer = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerUserId);
+                    var followers = await _context.UserFollows.Where(f => f.OrganizerId == organizerUserId).Select(f => f.FollowerId).ToListAsync();
+                    foreach(var followerId in followers)
+                    {
+                        await _notificationService.SendNotificationAsync(followerId, "ก๊วนใหม่จากผู้จัดที่คุณติดตาม", $"'{organizer?.UserProfile?.Nickname}' ได้สร้างก๊วน '{newSession.GroupName}'", "NEW_SESSION_FROM_FOLLOWED_ORGANIZER", newSession.SessionId);
+                    }
 
                     // คืนค่าหลังจาก Commit สำเร็จ
                     return (await GetSessionForManageViewAsync(newSession.SessionId, organizerUserId))!;
@@ -458,6 +468,22 @@ namespace DropInBadAPI.Service.Mobile.Game
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
 
+                    // --- แจ้งเตือนผู้เล่นทุกคนในก๊วนเกี่ยวกับการอัปเดต ---
+                    var participantUserIds = await _context.SessionParticipants
+                        .Where(p => p.SessionId == sessionId && p.Status != 3)
+                        .Select(p => p.UserId)
+                        .ToListAsync();
+
+                    foreach (var userId in participantUserIds)
+                    {
+                        await _notificationService.SendNotificationAsync(
+                            userId,
+                            "ข้อมูลก๊วนมีการเปลี่ยนแปลง",
+                            $"ข้อมูลก๊วน '{sessionToUpdate.GroupName}' มีการอัปเดต กรุณาตรวจสอบรายละเอียด",
+                            "SESSION_UPDATED",
+                            sessionId
+                        );
+                    }
                     return await GetSessionForManageViewAsync(sessionId, organizerUserId);
                 }
                 catch (Exception)
@@ -489,6 +515,22 @@ namespace DropInBadAPI.Service.Mobile.Game
             session.Status = 3; // 3 = Cancelled
             session.UpdatedDate = DateTime.UtcNow;
 
+            // --- แจ้งเตือนผู้เล่นทุกคนในก๊วนเกี่ยวกับการยกเลิก ---
+            var participantUserIds = await _context.SessionParticipants
+                .Where(p => p.SessionId == sessionId && p.Status != 3)
+                .Select(p => p.UserId)
+                .ToListAsync();
+
+            foreach (var userId in participantUserIds)
+            {
+                await _notificationService.SendNotificationAsync(
+                    userId,
+                    "ก๊วนถูกยกเลิก",
+                    $"ก๊วน '{session.GroupName}' ที่คุณเข้าร่วมได้ถูกยกเลิกโดยผู้จัด",
+                    "SESSION_CANCELLED",
+                    sessionId
+                );
+            }
             await _context.SaveChangesAsync();
             return true;
         }
@@ -1489,6 +1531,14 @@ namespace DropInBadAPI.Service.Mobile.Game
                 if (p.Status == 1) wasActive = true;
                 p.Status = 3; // 3 = Removed/Cancelled
                 p.CheckoutTime = DateTime.UtcNow; // Mark timestamp
+
+                // แจ้งเตือนผู้เล่นที่ถูกลบ
+                await _notificationService.SendNotificationAsync(
+                    p.UserId,
+                    "คุณถูกนำออกจากก๊วน",
+                    $"คุณถูกนำออกจากก๊วน '{session.GroupName}' โดยผู้จัด",
+                    "REMOVED_FROM_SESSION",
+                    sessionId);
             }
             else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
             {
@@ -1535,6 +1585,15 @@ namespace DropInBadAPI.Service.Mobile.Game
                 if (p == null) return (false, "Participant not found.");
                 if (p.Status != 2) return (false, "Participant is not in waitlist.");
                 p.Status = 1; // Promote to Joined
+
+                // แจ้งเตือนผู้เล่นที่ได้รับการเลื่อนสถานะ
+                await _notificationService.SendNotificationAsync(
+                    p.UserId,
+                    "คุณได้เป็นผู้เล่นตัวจริงแล้ว!",
+                    $"คุณได้รับการเลื่อนสถานะเป็นผู้เล่นตัวจริงในก๊วน '{session.GroupName}'",
+                    "PROMOTED_TO_ACTIVE",
+                    sessionId
+                );
             }
             else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
             {

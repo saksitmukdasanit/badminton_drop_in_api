@@ -40,13 +40,22 @@ namespace DropInBadAPI.Controllers.MobilePlayer
 
         [HttpGet("upcoming")]
         [AllowAnonymous]
-        public async Task<ActionResult<Response<IEnumerable<UpcomingSessionCardDto>>>> GetUpcomingSessions([FromQuery] string? keyword = null, [FromQuery] string? sortBy = null, [FromQuery] int page = 1, [FromQuery] int limit = 10)
+        public async Task<ActionResult<Response<IEnumerable<UpcomingSessionCardDto>>>> GetUpcomingSessions([FromQuery] string? keyword = null, [FromQuery] string? sortBy = null, [FromQuery] int? organizerId = null, [FromQuery] string? daysOfWeek = null, [FromQuery] string? gameTypeIds = null, [FromQuery] int page = 1, [FromQuery] int limit = 10)
         {
             var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) != null
              ? int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
              : (int?)null;
 
-            var sessions = await _playerSessionService.GetUpcomingSessionsAsync(currentUserId, keyword, sortBy, page, limit);
+            // --- NEW: แปลง String จาก Query Param เป็น List ---
+            var daysList = !string.IsNullOrEmpty(daysOfWeek)
+                ? daysOfWeek.Split(',').Select(d => Enum.Parse<DayOfWeek>(d, true)).ToList()
+                : null;
+
+            var gameTypeIdList = !string.IsNullOrEmpty(gameTypeIds)
+                ? gameTypeIds.Split(',').Select(int.Parse).ToList()
+                : null;
+
+            var sessions = await _playerSessionService.GetUpcomingSessionsAsync(currentUserId, keyword, sortBy, organizerId, daysList, gameTypeIdList, page, limit);
             return Ok(new Response<IEnumerable<UpcomingSessionCardDto>> { Status = 200, Message = "Upcoming sessions retrieved successfully.", Data = sessions });
         }
 
@@ -171,6 +180,43 @@ namespace DropInBadAPI.Controllers.MobilePlayer
             var (success, errorMessage) = await _playerSessionService.TogglePauseAsync(id, GetCurrentUserId(), dto.IsPaused);
             if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             return Ok(new Response<object> { Status = 200, Message = "Pause state updated." });
+        }
+
+        [HttpPost("{id}/bookmark")]
+        public async Task<ActionResult<Response<object>>> AddBookmark(int id)
+        {
+            var (success, errorMessage) = await _playerSessionService.ToggleBookmarkAsync(id, GetCurrentUserId(), true);
+            if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            return Ok(new Response<object> { Status = 200, Message = "Bookmarked successfully." });
+        }
+
+        [HttpDelete("{id}/bookmark")]
+        public async Task<ActionResult<Response<object>>> RemoveBookmark(int id)
+        {
+            var (success, errorMessage) = await _playerSessionService.ToggleBookmarkAsync(id, GetCurrentUserId(), false);
+            if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            return Ok(new Response<object> { Status = 200, Message = "Bookmark removed." });
+        }
+
+        [HttpGet("bookmarked")]
+        public async Task<ActionResult<Response<IEnumerable<UpcomingSessionCardDto>>>> GetBookmarkedSessions()
+        {
+            var sessions = await _playerSessionService.GetBookmarkedSessionsAsync(GetCurrentUserId());
+            return Ok(new Response<IEnumerable<UpcomingSessionCardDto>> { Status = 200, Message = "Bookmarked sessions retrieved successfully.", Data = sessions });
+        }
+
+        [HttpGet("{sessionId}/organizer-summary")]
+        [AllowAnonymous]
+        public async Task<ActionResult<Response<OrganizerSummaryDto>>> GetOrganizerSummaryBySession(int sessionId)
+        {
+            var session = await _context.GameSessions.FindAsync(sessionId);
+            if (session == null) return NotFound(new Response<object> { Status = 404, Message = "Session not found." });
+
+            var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) != null
+             ? int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
+             : (int?)null;
+            var summary = await _playerSessionService.GetOrganizerSummaryAsync(session.CreatedByUserId, currentUserId);
+            return Ok(new Response<OrganizerSummaryDto> { Status = 200, Message = "Success", Data = summary });
         }
     }
 }

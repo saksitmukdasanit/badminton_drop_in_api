@@ -108,8 +108,10 @@ builder.Services.AddScoped<IMatchManagementService, MatchManagementService>();
 builder.Services.AddScoped<IMatchRecommenderService, MatchRecommenderService>();
 builder.Services.AddScoped<IProfileService, ProfileService>();
 
+builder.Services.AddScoped<INotificationService, NotificationService>(); // ลงทะเบียน Notification Service
 
 builder.Services.AddScoped<IPlayerGameSessionService, PlayerGameSessionService>();
+builder.Services.AddScoped<IFollowService, FollowService>(); // ลงทะเบียน Follow Service
 
 
 

@@ -16,16 +16,19 @@ namespace DropInBadAPI.Services
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IServiceProvider _serviceProvider;
         private readonly IConfiguration _configuration;
+        private readonly INotificationService _notificationService;
 
         public MatchManagementService(
             BadmintonDbContext context, 
             IHubContext<ManagementGameHub> hubContext,
             IServiceProvider serviceProvider,
-            IConfiguration configuration) {
+            IConfiguration configuration,
+            INotificationService notificationService) {
             _context = context;
             _hubContext = hubContext;
             _serviceProvider = serviceProvider;
             _configuration = configuration;
+            _notificationService = notificationService;
         }
 
         public async Task<LiveSessionStateDto?> GetLiveStateAsync(int sessionId, int organizerUserId)
@@ -328,6 +331,21 @@ namespace DropInBadAPI.Services
 
             await _context.MatchPlayers.AddRangeAsync(matchPlayers);
             await _context.SaveChangesAsync();
+
+            // --- แจ้งเตือนผู้เล่นว่ากำลังจะได้ลงสนาม ---
+            foreach (var player in matchPlayers)
+            {
+                if (player.UserId.HasValue)
+                {
+                    await _notificationService.SendNotificationAsync(
+                        player.UserId.Value,
+                        "ถึงเวลาลงสนาม!",
+                        $"คุณกำลังจะเริ่มแข่งในสนาม {match.CourtNumber} ของก๊วน '{session.GroupName}'",
+                        "MATCH_STARTING",
+                        sessionId
+                    );
+                }
+            }
 
             // 5. เตรียมข้อมูลเพื่อส่งกลับ (CurrentlyPlayingMatchDto)
             var allPlayersInMatch = await _context.MatchPlayers
@@ -673,6 +691,21 @@ namespace DropInBadAPI.Services
             await _context.Payments.AddAsync(payment);
             
             await _context.SaveChangesAsync();
+
+            // --- แจ้งเตือนผู้เล่นว่าได้รับการชำระเงินแล้ว ---
+            if (bill.UserId.HasValue)
+            {
+                var organizer = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerUserId);
+
+                await _notificationService.SendNotificationAsync(
+                    bill.UserId.Value,
+                    "ยืนยันการชำระเงิน",
+                    $"'{organizer?.UserProfile?.Nickname ?? "ผู้จัด"}' ได้รับชำระเงินค่าก๊วน '{bill.Session.GroupName}' จำนวน {dto.Amount:N2} บาท ผ่าน {dto.PaymentMethod} เรียบร้อยแล้ว",
+                    "PAYMENT_CONFIRMED_BY_ORGANIZER",
+                    bill.SessionId
+                );
+            }
+
             return true;
         }
 
@@ -1334,6 +1367,21 @@ namespace DropInBadAPI.Services
             match.CourtNumber = courtNumberToAssign;
             match.StartTime = DateTime.UtcNow;
             await _context.SaveChangesAsync();
+
+            // --- แจ้งเตือนผู้เล่นว่ากำลังจะได้ลงสนาม ---
+            foreach (var player in match.MatchPlayers)
+            {
+                if (player.UserId.HasValue)
+                {
+                    await _notificationService.SendNotificationAsync(
+                        player.UserId.Value,
+                        "ถึงเวลาลงสนาม!",
+                        $"คุณกำลังจะเริ่มแข่งในสนาม {match.CourtNumber} ของก๊วน '{match.Session.GroupName}'",
+                        "MATCH_STARTING",
+                        match.SessionId
+                    );
+                }
+            }
 
             var matchDto = new CurrentlyPlayingMatchDto
             {

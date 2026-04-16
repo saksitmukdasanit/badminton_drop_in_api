@@ -16,24 +16,35 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         private readonly IConfiguration _configuration;
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IMatchManagementService _matchManagementService;
+        private readonly INotificationService _notificationService;
 
         public PlayerGameSessionService(
             BadmintonDbContext context, 
             IConfiguration configuration,
             IHubContext<ManagementGameHub> hubContext,
-            IMatchManagementService matchManagementService)
+            IMatchManagementService matchManagementService,
+            INotificationService notificationService)
         {
             _context = context;
             _configuration = configuration;
             _hubContext = hubContext;
             _matchManagementService = matchManagementService;
+            _notificationService = notificationService;
         }
 
-        public async Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int page = 1, int limit = 10)
+        public async Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int? organizerId = null, List<DayOfWeek>? daysOfWeek = null, List<int>? gameTypeIds = null, int page = 1, int limit = 10)
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var thaiCulture = new CultureInfo("th-TH");
             var userBookmarks = new HashSet<int>();
+
+            if (currentUserId.HasValue)
+            {
+                userBookmarks = await _context.UserBookmarkedSessions
+                    .Where(b => b.UserId == currentUserId.Value)
+                    .Select(b => b.SessionId)
+                    .ToHashSetAsync();
+            }
 
             var query = _context.GameSessions
                 .Include(s => s.SessionParticipants)
@@ -46,12 +57,30 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 query = query.Where(s => !s.SessionParticipants.Any(p => p.UserId == currentUserId.Value && (p.Status == 1 || p.Status == 2)));
             }
 
+            // --- NEW: กรองตามผู้จัด ---
+            if (organizerId.HasValue)
+            {
+                query = query.Where(s => s.CreatedByUserId == organizerId.Value);
+            }
+
             // 1. กรองข้อมูล (Search) จากชื่อก๊วน หรือ ชื่อสนาม ด้วย DB โดยตรง
             if (!string.IsNullOrWhiteSpace(keyword))
             {
                 var lowerKeyword = keyword.ToLower();
                 query = query.Where(s => s.GroupName.ToLower().Contains(lowerKeyword) ||
                                          (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)));
+            }
+
+            // --- NEW: กรองตามวันในสัปดาห์ ---
+            if (daysOfWeek != null && daysOfWeek.Any())
+            {
+                query = query.Where(s => daysOfWeek.Contains(s.SessionDate.DayOfWeek));
+            }
+
+            // --- NEW: กรองตามประเภทเกม ---
+            if (gameTypeIds != null && gameTypeIds.Any())
+            {
+                query = query.Where(s => s.GameTypeId.HasValue && gameTypeIds.Contains(s.GameTypeId.Value));
             }
 
             // 2. Map ข้อมูลให้เป็น DTO เพื่อประหยัด Memory ก้อนใหญ่
@@ -87,7 +116,11 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     UserStatus = currentUserId.HasValue
                         ? s.SessionParticipants
                             .Where(p => p.UserId == currentUserId.Value)
-                            .Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined") : p.Status == 2 ? "Waitlisted" : p.Status == 3 ? "Refund" : "NotJoined")
+                            // For the upcoming list, a cancelled status (3) should be treated as 'NotJoined'
+                            // so the user can book again. The 'Refund' status is handled in the 'MyGames' list.
+                            .Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined") 
+                                      : p.Status == 2 ? "Waitlisted" 
+                                      : "NotJoined")
                             .FirstOrDefault() ?? "NotJoined"
                         : "NotJoined"
                 });
@@ -97,15 +130,17 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             // 3. จัดเรียงข้อมูล (Sort) 
             if (sortBy == "ค่าสนาม")
             {
-                result = result.OrderBy(d => 
+                result = result.OrderByDescending(d => d.IsBookmarked)
+                               .ThenBy(d => 
                     (decimal.TryParse(d.CourtFeePerPerson, out var c) ? c : 0) + 
                     (decimal.TryParse(d.ShuttlecockFeePerPerson, out var sh) ? sh : 0)
                 ).ToList();
             }
             else
             {
-                // ค่าเริ่มต้น (เรียงตามวันและเวลาที่เร็วที่สุดขึ้นก่อน)
-                result = result.OrderBy(d => d.SessionStart).ToList();
+                // ค่าเริ่มต้น (เรียงตาม Bookmark ก่อน แล้วค่อยวันและเวลาที่เร็วที่สุดขึ้นก่อน)
+                result = result.OrderByDescending(d => d.IsBookmarked)
+                               .ThenBy(d => d.SessionStart).ToList();
             }
 
             // 4. แบ่งหน้า (Pagination)
@@ -114,11 +149,69 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             return result;
         }
 
+        public async Task<IEnumerable<UpcomingSessionCardDto>> GetBookmarkedSessionsAsync(int userId)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var thaiCulture = new CultureInfo("th-TH");
+
+            var bookmarkedSessionIds = await _context.UserBookmarkedSessions
+                .Where(b => b.UserId == userId)
+                .Select(b => b.SessionId)
+                .ToListAsync();
+
+            var sessions = await _context.GameSessions
+                // กรองเฉพาะ Session ที่ถูกบุ๊กมาร์ก และ วันที่ >= วันนี้ (ไม่เอาวันย้อนหลัง) และ สถานะเปิดรับอยู่
+                .Where(s => bookmarkedSessionIds.Contains(s.SessionId) && s.SessionDate >= today && s.Status == 1)
+                .Include(s => s.Venue)
+                .Include(s => s.GameSessionPhotos)
+                .Include(s => s.CreatedByUser).ThenInclude(u => u.UserProfile)
+                .Include(s => s.SessionParticipants)
+                .Include(s => s.SessionWalkinGuests)
+                .Include(s => s.GameType)
+                .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
+                .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
+                .ToListAsync();
+
+            return sessions.Select(s => new UpcomingSessionCardDto
+            {
+                SessionId = s.SessionId,
+                GroupName = s.GroupName,
+                ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
+                DayOfWeek = s.SessionDate.ToDateTime(TimeOnly.MinValue).ToString("dddd", thaiCulture),
+                SessionDate = s.SessionDate.ToString("dd/MM/yyyy", thaiCulture),
+                StartTime = s.StartTime.ToString("HH:mm"),
+                EndTime = s.EndTime.ToString("HH:mm"),
+                SessionStart = s.SessionDate.ToDateTime(s.StartTime),
+                CourtName = s.Venue != null ? s.Venue.VenueName : null,
+                Location = s.Venue != null ? s.Venue.Address : null,
+                Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue) ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท" : "สอบถามผู้จัด",
+                OrganizerName = s.CreatedByUser?.UserProfile?.Nickname ?? "N/A",
+                OrganizerImageUrl = s.CreatedByUser?.UserProfile?.ProfilePhotoUrl,
+                IsBookmarked = true,
+                MaxParticipants = s.MaxParticipants,
+                CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1 || p.Status == null) + s.SessionWalkinGuests.Count(g => g.Status == 1 || g.Status == null),
+                GameTypeName = s.GameType?.TypeName,
+                ShuttlecockBrandName = s.ShuttlecockModel?.Brand?.BrandName,
+                ShuttlecockModelName = s.ShuttlecockModel?.ModelName,
+                CourtImageUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
+                Status = s.Status,
+                CourtNumbers = s.CourtNumbers,
+                Notes = s.Notes,
+                CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
+                ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
+                CostingMethod = s.CostingMethod,
+                UserStatus = s.SessionParticipants.Where(p => p.UserId == userId).Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined") : p.Status == 2 ? "Waitlisted" : p.Status == 3 ? "Refund" : "NotJoined").FirstOrDefault() ?? "NotJoined"
+            }).ToList();
+        }
+
         public async Task<MyGameSessionsResponseDto> GetMySessionsAsync(int userId)
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var thaiCulture = new CultureInfo("th-TH");
-            var userBookmarks = new HashSet<int>();
+            var userBookmarks = await _context.UserBookmarkedSessions
+                .Where(b => b.UserId == userId)
+                .Select(b => b.SessionId)
+                .ToHashSetAsync();
 
             // ดึงข้อมูลก๊วนทั้งหมดที่มีชื่อ User คนนี้อยู่ใน Participant List
             var sessions = await _context.GameSessions
@@ -195,7 +288,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         {
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var thaiCulture = new CultureInfo("th-TH");
-            var userBookmarks = new HashSet<int>();
+            var userBookmarks = await _context.UserBookmarkedSessions
+                .Where(b => b.UserId == userId)
+                .Select(b => b.SessionId)
+                .ToHashSetAsync();
 
             // 1. ดึงเฉพาะก๊วนที่ผู้เล่นคนนี้มีชื่ออยู่ และ "วันที่ผ่านไปแล้ว"
             IQueryable<GameSession> query = _context.GameSessions
@@ -570,6 +666,14 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     }
 
                     await _context.SaveChangesAsync();
+
+                    // --- แจ้งเตือนผู้จัด ---
+                    var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
+                    string userName = user?.UserProfile?.Nickname ?? "ผู้เล่น";
+                    string notiTitle = newStatus == 1 ? "ผู้เล่นเข้าร่วมก๊วน" : "ผู้เล่นลงชื่อสำรอง";
+                    string notiMsg = $"{userName} ได้{(newStatus == 1 ? "เข้าร่วม" : "ลงคิวสำรอง")}ก๊วน {session.GroupName}";
+                    await _notificationService.SendNotificationAsync(session.CreatedByUserId, notiTitle, notiMsg, "JOIN_SESSION", sessionId);
+
                     await transaction.CommitAsync();
 
                     return (new JoinSessionResponseDto { ParticipantId = participantEntry.ParticipantId, Status = newStatus, StatusMessage = statusMessage }, string.Empty);
@@ -588,6 +692,15 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             if (participant == null || participant.Status == 3) return (false, "Booking not found.");
             participant.Status = 3;
             await _context.SaveChangesAsync();
+
+            // --- แจ้งเตือนผู้จัด ---
+            var session = await _context.GameSessions.FindAsync(sessionId);
+            var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
+            if (session != null && user != null)
+            {
+                await _notificationService.SendNotificationAsync(session.CreatedByUserId, "ผู้เล่นยกเลิกการจอง", $"{user.UserProfile?.Nickname ?? "ผู้เล่น"} ได้ยกเลิกการเข้าร่วมก๊วน {session.GroupName}", "CANCEL_BOOKING", sessionId);
+            }
+
             return (true, "Your booking has been cancelled.");
         }
 
@@ -611,6 +724,11 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             participant.CheckinTime = DateTime.UtcNow;
             await _context.SaveChangesAsync();
+
+            // --- แจ้งเตือนผู้จัด ---
+            var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
+            await _notificationService.SendNotificationAsync(session.CreatedByUserId, "ผู้เล่นเช็คอิน", $"{user?.UserProfile?.Nickname ?? "ผู้เล่น"} ได้เช็คอินเข้าสนามแล้ว", "PLAYER_CHECKIN", sessionId);
+
             return (true, "Check-in successful.");
         }
 
@@ -880,6 +998,13 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     var liveState = await _matchManagementService.GetLiveStateAsync(sessionId, session.CreatedByUserId);
                     await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("ReceiveLiveStateUpdate", liveState);
 
+                    // --- แจ้งเตือนผู้จัด (ถ้ามียอดชำระ) ---
+                    if (newPaymentAmount > 0)
+                    {
+                        var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
+                        await _notificationService.SendNotificationAsync(session.CreatedByUserId, "ได้รับชำระเงิน", $"{user?.UserProfile?.Nickname ?? "ผู้เล่น"} ได้ชำระเงินจำนวน {newPaymentAmount:N2} บาท", "PAYMENT_RECEIVED", sessionId);
+                    }
+
                     return (true, "Payment successful and checked out.");
                 }
                 catch (Exception ex)
@@ -902,6 +1027,53 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("PlayerPauseStateChanged", new { PlayerId = playerId, IsPaused = isPaused });
             
             return (true, "Pause state updated.");
+        }
+
+        public async Task<(bool Success, string ErrorMessage)> ToggleBookmarkAsync(int sessionId, int userId, bool isBookmark)
+        {
+            var existing = await _context.UserBookmarkedSessions.FirstOrDefaultAsync(b => b.UserId == userId && b.SessionId == sessionId);
+            if (isBookmark)
+            {
+                if (existing == null)
+                {
+                    await _context.UserBookmarkedSessions.AddAsync(new UserBookmarkedSession { UserId = userId, SessionId = sessionId, CreatedDate = DateTime.UtcNow });
+                    await _context.SaveChangesAsync();
+                }
+            }
+            else
+            {
+                if (existing != null)
+                {
+                    _context.UserBookmarkedSessions.Remove(existing);
+                    await _context.SaveChangesAsync();
+                }
+            }
+            return (true, string.Empty);
+        }
+
+        public async Task<OrganizerSummaryDto?> GetOrganizerSummaryAsync(int organizerId, int? currentUserId)
+        {
+            var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerId);
+            if (user == null) return null;
+
+            bool isFollowed = false;
+            if (currentUserId.HasValue)
+            {
+                isFollowed = await _context.UserFollows
+                    .AnyAsync(f => f.FollowerId == currentUserId.Value && f.OrganizerId == organizerId);
+            }
+
+            var sessions = await _context.GameSessions.Where(s => s.CreatedByUserId == organizerId).ToListAsync();
+            
+            return new OrganizerSummaryDto
+            {
+                OrganizerId = organizerId,
+                Nickname = user.UserProfile?.Nickname ?? "N/A",
+                ProfilePhotoUrl = user.UserProfile?.ProfilePhotoUrl,
+                TotalHosted = sessions.Count(s => s.Status != 3), // นับก๊วนที่ไม่ได้ถูกยกเลิกว่าเป็นการจัด
+                TotalCancelled = sessions.Count(s => s.Status == 3), // ยกเลิก (Status = 3)
+                IsFollowed = isFollowed
+            };
         }
     }
 }
