@@ -19,11 +19,12 @@ namespace DropInBadAPI.Services
         private readonly INotificationService _notificationService;
 
         public MatchManagementService(
-            BadmintonDbContext context, 
+            BadmintonDbContext context,
             IHubContext<ManagementGameHub> hubContext,
             IServiceProvider serviceProvider,
             IConfiguration configuration,
-            INotificationService notificationService) {
+            INotificationService notificationService)
+        {
             _context = context;
             _hubContext = hubContext;
             _serviceProvider = serviceProvider;
@@ -64,7 +65,7 @@ namespace DropInBadAPI.Services
             {
                 courtIdentifiers = Enumerable.Range(1, session.NumberOfCourts ?? 1).Select(i => i.ToString()).ToList();
             }
-            
+
             // สร้าง HashSet เพื่อให้ตรวจสอบชื่อสนามได้เร็วและแม่นยำ (Case-insensitive)
             var validCourtSet = new HashSet<string>(courtIdentifiers, StringComparer.OrdinalIgnoreCase);
 
@@ -76,44 +77,12 @@ namespace DropInBadAPI.Services
                     MatchId = match.MatchId,
                     CourtNumber = match.CourtNumber,
                     StartTime = match.StartTime,
-                    TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(p =>
-                    {
-                        var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
-                        return new PlayerInMatchDto
-                        {
-                            UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไปเพื่อให้ ID ตรงกับตอน Waiting
-                            WalkinId = p.WalkinId,
-                            Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
-                            ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
-                            GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
-                            SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
-                            SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
-                            EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
-                            EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
-                        };
-                    }).ToList(),
-                    TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p =>
-                    {
-                        var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
-                        return new PlayerInMatchDto
-                        {
-                            UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
-                            WalkinId = p.WalkinId,
-                            Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
-                            ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
-                            GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
-                            SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
-                            SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                            SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
-                            EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
-                            EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
-                        };
-                    }).ToList()
+                    TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(MapToPlayerInMatchDto).ToList(),
+                    TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(MapToPlayerInMatchDto).ToList()
                 });
 
             // 5. แยก Staged Matches โดยใช้ Logic String Whitelist
-            
+
             // กลุ่ม A: ลงสนามจริง (CourtNumber มีค่า และ "มีชื่ออยู่ในรายการสนามของ Session")
             var stagedMatchesForCourts = stagedMatches
                 .Where(m => !string.IsNullOrEmpty(m.CourtNumber) && validCourtSet.Contains(m.CourtNumber))
@@ -125,25 +94,6 @@ namespace DropInBadAPI.Services
                 .Where(m => string.IsNullOrEmpty(m.CourtNumber) || !validCourtSet.Contains(m.CourtNumber))
                 .ToList();
 
-            // Helper function for mapping
-            Func<MatchPlayer, PlayerInMatchDto> createStagedPlayerDto = p =>
-            {
-                var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
-                return new PlayerInMatchDto
-                {
-                    UserId = sessionParticipant?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId กลับไป
-                    WalkinId = p.WalkinId,
-                    Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
-                    ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
-                    GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
-                    SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
-                    SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
-                    SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
-                    EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
-                    EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
-                };
-            };
-
             // รวมแมตช์ที่จัดรอในสนาม (Staged - Matches on Courts) เข้าไปแสดงผลทับสนาม
             foreach (var stagedMatch in stagedMatchesForCourts.Values)
             {
@@ -154,8 +104,8 @@ namespace DropInBadAPI.Services
                         MatchId = stagedMatch.MatchId,
                         CourtNumber = stagedMatch.CourtNumber,
                         StartTime = null, // ยังไม่เริ่ม
-                        TeamA = stagedMatch.MatchPlayers.Where(p => p.Team == "A").Select(createStagedPlayerDto).ToList(),
-                        TeamB = stagedMatch.MatchPlayers.Where(p => p.Team == "B").Select(createStagedPlayerDto).ToList()
+                        TeamA = stagedMatch.MatchPlayers.Where(p => p.Team == "A").Select(MapToPlayerInMatchDto).ToList(),
+                        TeamB = stagedMatch.MatchPlayers.Where(p => p.Team == "B").Select(MapToPlayerInMatchDto).ToList()
                     };
                 }
             }
@@ -207,7 +157,7 @@ namespace DropInBadAPI.Services
                     SkillLevelName = p.SkillLevel != null ? p.SkillLevel.LevelName : null,
                     SkillLevelColor = p.SkillLevel != null ? p.SkillLevel.ColorHexCode : null,
                     // ถ้าเคยเล่นแล้ว ให้ใช้เวลาจบเกมล่าสุดเป็นเวลาเริ่มรอ ถ้ายังไม่เคยให้ใช้เวลา Checkin
-                    CheckedInTime = (memberGameCounts.ContainsKey(p.UserId) && memberGameCounts[p.UserId].LastPlayed.HasValue && memberGameCounts[p.UserId].LastPlayed > p.CheckinTime) 
+                    CheckedInTime = (memberGameCounts.ContainsKey(p.UserId) && memberGameCounts[p.UserId].LastPlayed.HasValue && memberGameCounts[p.UserId].LastPlayed > p.CheckinTime)
                                     ? memberGameCounts[p.UserId].LastPlayed.Value : p.CheckinTime.Value,
                     TotalGamesPlayed = memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId].Count : 0
                 })
@@ -240,8 +190,8 @@ namespace DropInBadAPI.Services
             {
                 MatchId = match.MatchId,
                 CourtNumber = match.CourtNumber, // ส่งค่าเดิมกลับไป (เช่น "-1", "-2")
-                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(createStagedPlayerDto).ToList(),
-                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(createStagedPlayerDto).ToList()
+                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(MapToPlayerInMatchDto).ToList(),
+                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(MapToPlayerInMatchDto).ToList()
             }).ToList();
 
             // --- จัดการชื่อซ้ำทั้งหมดใน Session ---
@@ -253,26 +203,8 @@ namespace DropInBadAPI.Services
             allPlayersInSession.AddRange(stagedMatchesDto.SelectMany(sm => sm.TeamB));
             allPlayersInSession.AddRange(allWaitingPlayers);
 
-            // 2. สร้างฟังก์ชันสำหรับจัดการชื่อซ้ำ
-            Action<IEnumerable<dynamic>> processDuplicateNames = (players) =>
-            {
-                var duplicateGroups = players
-                    .Where(p => !string.IsNullOrEmpty(p.Nickname))
-                    .GroupBy(p => p.Nickname)
-                    .Where(g => g.Count() > 1);
-
-                foreach (var group in duplicateGroups)
-                {
-                    int counter = 1;
-                    foreach (var player in group)
-                    {
-                        player.Nickname = $"{player.Nickname} ({counter++})";
-                    }
-                }
-            };
-
             // 3. เรียกใช้ฟังก์ชันกับผู้เล่นทั้งหมด
-            processDuplicateNames(allPlayersInSession.Cast<dynamic>());
+            ProcessDuplicateNames(allPlayersInSession.Cast<dynamic>());
 
             var result = new LiveSessionStateDto
             {
@@ -442,10 +374,10 @@ namespace DropInBadAPI.Services
 
         // --- HELPER: รวม Logic การคำนวณไว้ที่นี่ ---
         private async Task<BillSummaryDto?> CalculateAndSaveBillAsync(
-            string participantType, 
-            int participantId, 
-            int organizerUserId, 
-            CheckoutRequestDto? customCheckout, 
+            string participantType,
+            int participantId,
+            int organizerUserId,
+            CheckoutRequestDto? customCheckout,
             bool isPreview)
         {
             var strategy = _context.Database.CreateExecutionStrategy();
@@ -507,15 +439,18 @@ namespace DropInBadAPI.Services
                     var pastBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
                         .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 2).ToListAsync();
 
-                    bool courtPaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าคอร์ท" || li.Description == "ค่าสนาม"));
+                    bool courtPaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าสนาม"));
                     bool servicePaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าธรรมเนียม"));
 
                     if (customCheckout != null && customCheckout.CustomLineItems != null && customCheckout.CustomLineItems.Any())
                     {
                         foreach (var item in customCheckout.CustomLineItems)
                         {
-                            if (courtPaid && (item.Description == "ค่าคอร์ท" || item.Description == "ค่าสนาม")) continue;
+                            if (courtPaid && item.Description == "ค่าสนาม") continue;
                             if (servicePaid && item.Description == "ค่าธรรมเนียม") continue;
+                            
+                            // Frontend ดึงข้อมูลจาก Preview ซึ่งคำนวณยอดสุทธิที่ต้องจ่ายเพิ่มมาให้แล้ว 
+                            // จึงสามารถนำ item.Amount มาบันทึกได้เลย ไม่ต้องหักลบซ้ำซ้อน
                             lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                             totalAmount += item.Amount;
                         }
@@ -558,7 +493,7 @@ namespace DropInBadAPI.Services
                                     shuttleCost += matchCost;
                                 }
                             }
-                            
+
                             shuttleTotal = Math.Ceiling(shuttleCost);
                         }
                         // --- NEW: เพิ่ม Logic สำหรับคิดค่าลูกแบดแบบ "ต่อคนต่อเกม" (CostingMethod = 1 หรือ null) ---
@@ -588,10 +523,10 @@ namespace DropInBadAPI.Services
                                 .ToListAsync();
 
                             var allCustomItems = allBills.SelectMany(b => b.BillLineItems)
-                                .Where(li => li.Description != "ค่าคอร์ท" && li.Description != "ค่าสนาม" && 
+                                .Where(li => li.Description != "ค่าสนาม" &&
                                              li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
 
-                            foreach(var item in allCustomItems)
+                            foreach (var item in allCustomItems)
                             {
                                 lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                                 totalAmount += item.Amount;
@@ -599,22 +534,28 @@ namespace DropInBadAPI.Services
                         }
                         else
                         {
-                            // --- โหมดคิดเงินจริง: ดึงเฉพาะ Custom Item จากบิลที่ "ค้างชำระ" มาคิดยอดเหมือนเดิม ---
-                            var pendingBill = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                        // --- โหมดคิดเงินจริง: ดึงบิลที่ "ค้างชำระ" มาคิดยอดและยกเลิกบิลเก่า เพื่อไม่ให้ยอดซ้ำซ้อน ---
+                        var pendingBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
                                 .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 1) // 1 = Pending
-                                .OrderByDescending(b => b.CreatedDate)
-                                .FirstOrDefaultAsync();
+                            .ToListAsync();
 
-                            if (pendingBill != null)
+                        if (pendingBills.Any())
                             {
-                                var customItems = pendingBill.BillLineItems.Where(li => 
-                                    li.Description != "ค่าคอร์ท" && li.Description != "ค่าสนาม" && 
+                            var latestPending = pendingBills.OrderByDescending(b => b.CreatedDate).First();
+                            var customItems = latestPending.BillLineItems.Where(li =>
+                                    li.Description != "ค่าสนาม" &&
                                     li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
-                                foreach(var item in customItems)
+                                foreach (var item in customItems)
                                 {
                                     lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                                     totalAmount += item.Amount;
                                 }
+
+                            // ยกเลิกบิลที่ค้างชำระทั้งหมด เพื่อสร้างบิลใหม่ใบเดียว
+                            foreach (var pb in pendingBills)
+                            {
+                                pb.Status = 3; // 3 = Cancelled
+                            }
                             }
                         }
                     }
@@ -675,7 +616,7 @@ namespace DropInBadAPI.Services
             if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return false;
 
             // 1. อัปเดตสถานะบิลเป็นจ่ายแล้ว (Status = 2)
-            bill.Status = 2; 
+            bill.Status = 2;
 
             // 2. บันทึกประวัติการจ่ายเงิน (ถ้ามีตาราง Payments)
             var payment = new Payment
@@ -686,10 +627,10 @@ namespace DropInBadAPI.Services
                 PaymentDate = DateTime.UtcNow,
                 ReceivedByUserId = organizerUserId
             };
-            
+
             // หมายเหตุ: ต้องแน่ใจว่า DbContext มี DbSet<Payment> Payments
             await _context.Payments.AddAsync(payment);
-            
+
             await _context.SaveChangesAsync();
 
             // --- แจ้งเตือนผู้เล่นว่าได้รับการชำระเงินแล้ว ---
@@ -769,8 +710,8 @@ namespace DropInBadAPI.Services
                 // ตรวจสอบว่าสิ่งที่สแกนมาเป็นตัวเลข (UserId) หรือไม่
                 bool isNumeric = int.TryParse(dto.ScannedData, out int scannedUserId);
 
-                var user = await _context.Users.FirstOrDefaultAsync(u => 
-                    u.UserPublicId.ToString() == dto.ScannedData || 
+                var user = await _context.Users.FirstOrDefaultAsync(u =>
+                    u.UserPublicId.ToString() == dto.ScannedData ||
                     (isNumeric && u.UserId == scannedUserId));
 
                 if (user == null) return (false, "User not found from QR code.");
@@ -805,8 +746,8 @@ namespace DropInBadAPI.Services
                 .AsNoTracking() // เพิ่ม AsNoTracking เพื่อประสิทธิภาพ
                 .Include(g => g.Session)
                 // FIX: เปลี่ยนกลับมาใช้ Contains + ToLower ซึ่งเสถียรกว่า Like ในหลาย Database
-                .Where(g => (g.Session.CreatedByUserId == organizerUserId || g.CreatedBy == organizerUserId) && 
-                            (g.GuestName.Contains(term) || 
+                .Where(g => (g.Session.CreatedByUserId == organizerUserId || g.CreatedBy == organizerUserId) &&
+                            (g.GuestName.Contains(term) ||
                              (g.PhoneNumber != null && g.PhoneNumber.Contains(term))))
                 .OrderByDescending(g => g.CreatedDate) // เอาล่าสุดขึ้นก่อน
                 .Select(g => new GuestSuggestionDto
@@ -828,7 +769,7 @@ namespace DropInBadAPI.Services
             {
                 SessionId = sessionId,
                 GuestName = dto.GuestName,
-                PhoneNumber = dto.PhoneNumber, 
+                PhoneNumber = dto.PhoneNumber,
                 Gender = (short?)dto.Gender,
                 SkillLevelId = dto.SkillLevelId,
                 Status = 1,
@@ -868,7 +809,7 @@ namespace DropInBadAPI.Services
                     .FirstOrDefaultAsync(p => p.ParticipantId == participantId);
 
                 if (participant == null) return false;
-                
+
                 sessionId = participant.SessionId;
                 organizerUserId = participant.Session.CreatedByUserId;
 
@@ -1060,7 +1001,7 @@ namespace DropInBadAPI.Services
 
             if (hours > 0 && minutes > 0) return $"{hours} ชม. {minutes} นาที";
             if (hours > 0) return $"{hours} ชม.";
-            
+
             return $"{minutes} นาที";
         }
 
@@ -1388,10 +1329,10 @@ namespace DropInBadAPI.Services
                 MatchId = match.MatchId,
                 CourtNumber = match.CourtNumber,
                 StartTime = match.StartTime.Value,
-                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(p => new PlayerInMatchDto 
-                { 
+                TeamA = match.MatchPlayers.Where(p => p.Team == "A").Select(p => new PlayerInMatchDto
+                {
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
-                    WalkinId = p.WalkinId, 
+                    WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
                     ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                     GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
@@ -1401,10 +1342,10 @@ namespace DropInBadAPI.Services
                     EmergencyContactName = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactName : null,
                     EmergencyContactPhone = p.UserId.HasValue ? p.User.UserProfile.EmergencyContactPhone : null
                 }).ToList(),
-                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p => new PlayerInMatchDto 
-                { 
+                TeamB = match.MatchPlayers.Where(p => p.Team == "B").Select(p => new PlayerInMatchDto
+                {
                     UserId = p.User?.SessionParticipants.FirstOrDefault(sp => sp.SessionId == match.SessionId)?.ParticipantId ?? p.UserId, // FIX: ส่ง ParticipantId
-                    WalkinId = p.WalkinId, 
+                    WalkinId = p.WalkinId,
                     Nickname = p.UserId.HasValue ? p.User.UserProfile.Nickname : p.Walkin.GuestName,
                     ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
                     GenderName = p.UserId.HasValue ? (p.User.UserProfile.Gender == 1 ? "ชาย" : p.User.UserProfile.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin.Gender == 1 ? "ชาย" : p.Walkin.Gender == 2 ? "หญิง" : "อื่นๆ"),
@@ -1432,6 +1373,42 @@ namespace DropInBadAPI.Services
                 if (liveState != null)
                 {
                     await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("ReceiveLiveStateUpdate", liveState);
+                }
+            }
+        }
+
+        // --- Helper Methods ---
+        private PlayerInMatchDto MapToPlayerInMatchDto(MatchPlayer p)
+        {
+            var sessionParticipant = p.User?.SessionParticipants.FirstOrDefault();
+            return new PlayerInMatchDto
+            {
+                UserId = sessionParticipant?.ParticipantId ?? p.UserId, // ส่ง ParticipantId กลับไปเพื่อให้ ID ตรงกับตอน Waiting
+                WalkinId = p.WalkinId,
+                Nickname = p.UserId.HasValue ? p.User?.UserProfile?.Nickname ?? "N/A" : p.Walkin?.GuestName ?? "N/A",
+                ProfilePhotoUrl = p.UserId.HasValue ? p.User?.UserProfile?.ProfilePhotoUrl : null,
+                GenderName = p.UserId.HasValue ? (p.User?.UserProfile?.Gender == 1 ? "ชาย" : p.User?.UserProfile?.Gender == 2 ? "หญิง" : "อื่นๆ") : (p.Walkin?.Gender == 1 ? "ชาย" : p.Walkin?.Gender == 2 ? "หญิง" : "อื่นๆ"),
+                SkillLevelId = p.UserId.HasValue ? sessionParticipant?.SkillLevelId : p.Walkin?.SkillLevelId,
+                SkillLevelName = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.LevelName : p.Walkin?.SkillLevel?.LevelName,
+                SkillLevelColor = p.UserId.HasValue ? sessionParticipant?.SkillLevel?.ColorHexCode : p.Walkin?.SkillLevel?.ColorHexCode,
+                EmergencyContactName = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactName : null,
+                EmergencyContactPhone = p.UserId.HasValue ? p.User?.UserProfile?.EmergencyContactPhone : null
+            };
+        }
+
+        private void ProcessDuplicateNames(IEnumerable<dynamic> players)
+        {
+            var duplicateGroups = players
+                .Where(p => p.Nickname != null && p.Nickname != "")
+                .GroupBy(p => (string)p.Nickname)
+                .Where(g => g.Count() > 1);
+
+            foreach (var group in duplicateGroups)
+            {
+                int counter = 1;
+                foreach (var player in group)
+                {
+                    player.Nickname = $"{player.Nickname} ({counter++})";
                 }
             }
         }

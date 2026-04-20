@@ -7,6 +7,7 @@ using DropInBadAPI.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using DropInBadAPI.Constants;
 
 namespace DropInBadAPI.Service.Mobile.Game
 {
@@ -840,7 +841,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 return (false, "Session not found or you do not have permission.");
             }
 
-            if (participantType.Equals("Member", StringComparison.OrdinalIgnoreCase))
+            if (participantType.Equals(ParticipantTypes.Member, StringComparison.OrdinalIgnoreCase))
             {
                 var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.ParticipantId == participantId && p.SessionId == sessionId);
                 if (participant == null)
@@ -849,7 +850,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 }
                 participant.SkillLevelId = newSkillLevelId;
             }
-            else if (participantType.Equals("Guest", StringComparison.OrdinalIgnoreCase))
+            else if (participantType.Equals(ParticipantTypes.Guest, StringComparison.OrdinalIgnoreCase))
             {
                 var guest = await _context.SessionWalkinGuests.FirstOrDefaultAsync(g => g.WalkinId == participantId && g.SessionId == sessionId);
                 if (guest == null)
@@ -881,9 +882,10 @@ namespace DropInBadAPI.Service.Mobile.Game
         .Include(s => s.CreatedByUser.UserProfile)
         .Include(s => s.SessionParticipants) // Include ไว้เพื่อนับจำนวน
         .Include(s => s.SessionWalkinGuests) // Include ไว้เพื่อนับจำนวน
-        .Include(s => s.ParticipantBills) // NEW: Include Bills เพื่อคำนวณยอดจ่าย
+        .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: Include LineItems เพื่อหักค่าธรรมเนียม
         .Include(s => s.GameType)
         .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
+        .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion (เซิร์ฟเวอร์ตัดจบทำให้ไม่พบข้อมูล)
         .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
         .Select(s => new UpcomingSessionCardDto
         {
@@ -1006,8 +1008,9 @@ namespace DropInBadAPI.Service.Mobile.Game
                .Include(s => s.Venue)
                .Include(s => s.SessionParticipants)
                .Include(s => s.SessionWalkinGuests)
-               .Include(s => s.ParticipantBills) // ดึงบิลเพื่อคำนวณเงิน
+               .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: Include LineItems เพื่อหักค่าธรรมเนียม
                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
+               .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion
                .OrderByDescending(s => s.SessionDate) // เรียงจากล่าสุดไปเก่าสุด
                .ThenByDescending(s => s.StartTime)
                .ToListAsync();
@@ -1034,33 +1037,23 @@ namespace DropInBadAPI.Service.Mobile.Game
                     decimal sPart = s.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
 
                     var bills = s.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
-                    decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
                     
-                    decimal totalVal = 0;
-                    if (paidVal > 0 || bills.Any(b => b.Status == 1))
-                    {
-                        totalVal = bills.Sum(b => b.TotalAmount);
-                    }
-                    else
-                    {
-                        decimal expectedTotal = cPart + sPart + serviceFee;
-                        totalVal = expectedTotal;
-                    }
+                    // หักลบค่าธรรมเนียมแอปออก เพื่อให้แสดงเฉพาะรายรับของผู้จัดจริงๆ
+                    decimal serviceFeeTotal = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
+                    decimal serviceFeePaid = bills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
 
-                    decimal actualServiceFee = serviceFee;
-                    if (bills.Any())
-                    {
-                        var serviceFeeItem = bills.SelectMany(b => b.BillLineItems).FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
-                        if (serviceFeeItem != null) actualServiceFee = serviceFeeItem.Amount;
-                        else if (totalVal > 0 && totalVal < serviceFee) actualServiceFee = totalVal;
-                        else if (totalVal == 0) actualServiceFee = 0;
-                    }
-                    else if (totalVal == 0) actualServiceFee = 0;
+                    decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount) - serviceFeePaid;
+                    if (paidVal < 0) paidVal = 0;
 
-                    decimal netTotal = (totalVal - actualServiceFee) > 0 ? (totalVal - actualServiceFee) : 0;
-                    decimal netPaid = (paidVal >= actualServiceFee) ? (paidVal - actualServiceFee) : 0;
+                    decimal billedTotal = bills.Sum(b => b.TotalAmount) - serviceFeeTotal;
+                    if (billedTotal < 0) billedTotal = 0;
 
-                    return (netPaid, netTotal);
+                    decimal customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+
+                    decimal totalVal = cPart + sPart + customItems;
+                    if (billedTotal > totalVal) totalVal = billedTotal;
+
+                    return (paidVal, totalVal);
                 }
 
                 decimal aggTotalIncome = 0;
@@ -1215,8 +1208,9 @@ namespace DropInBadAPI.Service.Mobile.Game
             var session = await _context.GameSessions
                 .Include(s => s.SessionParticipants).ThenInclude(p => p.User.UserProfile)
                 .Include(s => s.SessionWalkinGuests)
-                .Include(s => s.ParticipantBills)
+                .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: สำคัญมาก ป้องกันค่าธรรมเนียมรั่วไหล
                 .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
+                .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion
                 .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
 
@@ -1271,55 +1265,32 @@ namespace DropInBadAPI.Service.Mobile.Game
             {
                 // 1. คำนวณค่าใช้จ่ายมาตรฐาน
                 decimal cPart = courtFeePerPerson;
-                decimal sPart = 0;
-                if (session.CostingMethod == 2) // Buffet
-                {
-                    sPart = shuttleFeePerPerson;
-                }
-                else 
-                {
-                    sPart = shuttleFeePerPerson * gamesPlayed;
-                }
+                decimal sPart = session.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
 
-                // 2. ตรวจสอบบิล
                 var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
-                decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
+                
+                // หักลบค่าธรรมเนียมแอปออก เพื่อให้แสดงเฉพาะรายรับของผู้จัด
+                decimal serviceFeeTotal = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
+                decimal serviceFeePaid = bills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
 
-                decimal totalVal = 0;
-                if (paidVal > 0 || bills.Any(b => b.Status == 1))
-                {
-                    // ถ้ายอดมีการสร้างบิลแล้ว (จ่ายแล้ว หรือ รอจ่าย) ให้ใช้ยอดจากบิล
-                    totalVal = bills.Sum(b => b.TotalAmount);
-                }
-                else
-                {
-                    // ถ้ายังไม่จ่าย ให้ใช้ยอดคำนวณมาตรฐาน (+10 ค่าบริการ)
-                    totalVal = cPart + sPart + serviceFee; 
-                }
+                decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount) - serviceFeePaid;
+                if (paidVal < 0) paidVal = 0;
 
-                // --- NEW: คำนวณยอดสุทธิ (Net) ที่ผู้จัดได้รับจริง ---
-                decimal actualServiceFee = serviceFee;
-                if (bills.Any())
-                {
-                    var serviceFeeItem = bills.SelectMany(b => b.BillLineItems).FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
-                    if (serviceFeeItem != null) {
-                        actualServiceFee = serviceFeeItem.Amount;
-                    } else if (totalVal > 0 && totalVal < serviceFee) {
-                        actualServiceFee = totalVal; 
-                    } else if (totalVal == 0) {
-                        actualServiceFee = 0;
-                    }
-                }
-                else if (totalVal == 0)
-                {
-                    actualServiceFee = 0;
-                }
+                decimal billedTotal = bills.Sum(b => b.TotalAmount) - serviceFeeTotal;
+                if (billedTotal < 0) billedTotal = 0;
 
-                decimal netT = (totalVal - actualServiceFee) > 0 ? (totalVal - actualServiceFee) : 0;
-                decimal netP = (paidVal >= actualServiceFee) ? (paidVal - actualServiceFee) : 0;
-                decimal netU = (netT - netP) > 0 ? (netT - netP) : 0;
+                decimal customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
 
-                return (paidVal, totalVal, cPart, sPart, actualServiceFee, netT, netP, netU);
+                decimal totalVal = cPart + sPart + customItems;
+                if (billedTotal > totalVal) totalVal = billedTotal;
+
+                decimal unpaidVal = totalVal - paidVal;
+                if (unpaidVal < 0) unpaidVal = 0;
+
+                // ค่าบริการที่เก็บได้จริง (สำหรับแสดงแยก)
+                decimal actualServiceFee = serviceFeeTotal > 0 ? serviceFeeTotal : (bills.Any() ? 0 : serviceFee);
+
+                return (paidVal, totalVal, cPart, sPart, actualServiceFee, totalVal, paidVal, unpaidVal);
             }
 
             // Helper สำหรับคำนวณสัดส่วนการจ่าย (Ratio Logic ย้ายมาจาก Frontend)
@@ -1523,7 +1494,7 @@ namespace DropInBadAPI.Service.Mobile.Game
 
             bool wasActive = false;
 
-            if (participantType.Equals("member", StringComparison.OrdinalIgnoreCase))
+            if (participantType.Equals(ParticipantTypes.Member, StringComparison.OrdinalIgnoreCase))
             {
                 var p = session.SessionParticipants.FirstOrDefault(x => x.ParticipantId == participantId);
                 if (p == null) return (false, "Participant not found.");
@@ -1540,7 +1511,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                     "REMOVED_FROM_SESSION",
                     sessionId);
             }
-            else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
+            else if (participantType.Equals(ParticipantTypes.Guest, StringComparison.OrdinalIgnoreCase))
             {
                 var g = session.SessionWalkinGuests.FirstOrDefault(x => x.WalkinId == participantId);
                 if (g == null) return (false, "Guest not found.");
