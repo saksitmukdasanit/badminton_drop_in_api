@@ -112,6 +112,8 @@ builder.Services.AddScoped<INotificationService, NotificationService>(); // ล�
 
 builder.Services.AddScoped<IPlayerGameSessionService, PlayerGameSessionService>();
 builder.Services.AddScoped<IFollowService, FollowService>(); // ลงทะเบียน Follow Service
+builder.Services.AddScoped<IPlayerDashboardService, PlayerDashboardService>(); // ลงทะเบียน Dashboard Service ของ Player
+builder.Services.AddScoped<IOrganizerDashboardService, OrganizerDashboardService>(); // ลงทะเบียน Dashboard Service ของ Organizer
 
 
 

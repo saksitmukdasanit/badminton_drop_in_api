@@ -30,6 +30,23 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto)
         {
+            // --- 1. เช็คเวลาและสนามทับซ้อนก่อนสร้าง ---
+            var overlappingSession = await _context.GameSessions
+                .Include(s => s.Venue)
+                .Where(s => s.CreatedByUserId == organizerUserId
+                         && s.Status != 3 // ไม่เช็คก๊วนที่ยกเลิกไปแล้ว
+                         && s.SessionDate == dto.SessionDate
+                         && s.Venue.GooglePlaceId == dto.VenueData.GooglePlaceId
+                         && s.StartTime < dto.EndTime
+                         && s.EndTime > dto.StartTime)
+                .FirstOrDefaultAsync();
+
+            if (overlappingSession != null)
+            {
+                string timeOld = $"{overlappingSession.StartTime:hh\\:mm} - {overlappingSession.EndTime:hh\\:mm}";
+                throw new Exception($"พบก๊วนซ้ำ!\nคุณได้สร้างก๊วน \"{overlappingSession.GroupName}\"\nที่สนามนี้ในเวลา {timeOld} ไว้แล้ว\nกรุณาตรวจสอบเวลาอีกครั้ง");
+            }
+
             var strategy = _context.Database.CreateExecutionStrategy();
             return await strategy.ExecuteAsync(async () =>
             {
@@ -375,6 +392,24 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public async Task<ManageGameSessionDto?> UpdateSessionAsync(int sessionId, int organizerUserId, SaveGameSessionDto dto)
         {
+            // --- 1. เช็คเวลาและสนามทับซ้อนก่อนแก้ไข ---
+            var overlappingSession = await _context.GameSessions
+                .Include(s => s.Venue)
+                .Where(s => s.CreatedByUserId == organizerUserId
+                         && s.SessionId != sessionId // ยกเว้นก๊วนที่กำลังแก้ไขอยู่
+                         && s.Status != 3
+                         && s.SessionDate == dto.SessionDate
+                         && s.Venue.GooglePlaceId == dto.VenueData.GooglePlaceId
+                         && s.StartTime < dto.EndTime
+                         && s.EndTime > dto.StartTime)
+                .FirstOrDefaultAsync();
+
+            if (overlappingSession != null)
+            {
+                string timeOld = $"{overlappingSession.StartTime:hh\\:mm} - {overlappingSession.EndTime:hh\\:mm}";
+                throw new Exception($"พบเวลาทับซ้อน!\nก๊วนนี้เวลาทับกับ \"{overlappingSession.GroupName}\"\nที่สนามนี้ในเวลา {timeOld}\nกรุณาตรวจสอบเวลาอีกครั้ง");
+            }
+
             var sessionToUpdate = await _context.GameSessions
                 .Include(s => s.GameSessionFacilities)
                 .Include(s => s.GameSessionPhotos)

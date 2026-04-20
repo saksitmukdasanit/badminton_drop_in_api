@@ -331,7 +331,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             return new MyGameSessionsResponseDto
             {
-                Playing = dtos.Where(d => d.Status == 2 || d.Status == 6).ToList(),
+                Playing = dtos.Where(d => (d.Status == 2 || d.Status == 6) && d.UserStatus != "Refund").ToList(),
                 Refund = dtos.Where(d => d.UserStatus == "Refund" || d.Status == 3 || d.Status == 4).ToList(),
                 Upcoming = dtos.Where(d => !(d.Status == 2 || d.Status == 6) && !(d.UserStatus == "Refund" || d.Status == 3 || d.Status == 4)).ToList()
             };

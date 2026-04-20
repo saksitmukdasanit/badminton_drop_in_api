@@ -61,14 +61,21 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPost]
         public async Task<ActionResult<Response<ManageGameSessionDto>>> CreateSession([FromBody] SaveGameSessionDto dto)
         {
-            var newSession = await _sessionService.CreateSessionAsync(GetCurrentUserId(), dto);
-            var response = new Response<ManageGameSessionDto>
+            try
             {
-                Status = 201,
-                Message = "Session created successfully.",
-                Data = newSession
-            };
-            return CreatedAtAction(nameof(GetSession), new { id = newSession.SessionId }, response);
+                var newSession = await _sessionService.CreateSessionAsync(GetCurrentUserId(), dto);
+                var response = new Response<ManageGameSessionDto>
+                {
+                    Status = 201,
+                    Message = "Session created successfully.",
+                    Data = newSession
+                };
+                return CreatedAtAction(nameof(GetSession), new { id = newSession.SessionId }, response);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = ex.Message });
+            }
         }
 
         // POST: api/GameSessions/5/duplicate
@@ -96,13 +103,20 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPut("{id}")]
         public async Task<ActionResult<Response<ManageGameSessionDto>>> UpdateSession(int id, [FromBody] SaveGameSessionDto dto)
         {
-            var updatedSession = await _sessionService.UpdateSessionAsync(id, GetCurrentUserId(), dto);
-            if (updatedSession == null)
+            try
             {
-                return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or you do not have permission to update it." });
-            }
+                var updatedSession = await _sessionService.UpdateSessionAsync(id, GetCurrentUserId(), dto);
+                if (updatedSession == null)
+                {
+                    return StatusCode(403, new Response<object> { Status = 403, Message = "Session not found or you do not have permission to update it." });
+                }
 
-            return Ok(new Response<ManageGameSessionDto> { Status = 200, Message = "Session updated successfully.", Data = updatedSession });
+                return Ok(new Response<ManageGameSessionDto> { Status = 200, Message = "Session updated successfully.", Data = updatedSession });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = ex.Message });
+            }
         }
 
         // DELETE: api/GameSessions/5

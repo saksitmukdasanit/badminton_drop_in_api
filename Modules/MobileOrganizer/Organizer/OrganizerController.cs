@@ -1,5 +1,5 @@
 using DropInBadAPI.Dtos;
-using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
+using DropInBadAPI.Models;
 using DropInBadAPI.Service.Mobile.Organizer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,86 +19,38 @@ namespace DropInBadAPI.Controllers.Mobile
             _organizerService = organizerService;
         }
 
-        private int GetCurrentUserId()
-        {
-            return int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        }
-
-        [HttpPost("register")]
-        public async Task<ActionResult<Response<OrganizerProfile>>> RegisterAsOrganizer([FromBody] OrganizerProfileDto dto)
-        {
-            var userId = GetCurrentUserId();
-            var (newProfile, errorMessage) = await _organizerService.RegisterAsync(userId, dto);
-
-            if (errorMessage != null)
-            {
-                return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
-            }
-
-            // ถ้าสำเร็จ
-            var response = new Response<OrganizerProfile>
-            {
-                Status = 201,
-                Message = "Organizer profile created successfully. Awaiting approval.",
-                Data = newProfile
-            };
-            return CreatedAtAction(nameof(GetOrganizerProfile), new { }, response);
-        }
+        private int GetCurrentUserId() => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
         [HttpGet("profile")]
-        public async Task<ActionResult<Response<OrganizerProfile>>> GetOrganizerProfile()
+        public async Task<ActionResult<Response<OrganizerProfileDto>>> GetProfile()
         {
-            var userId = GetCurrentUserId();
-            var profile = await _organizerService.GetOrganizerProfileAsync(userId);
-
-            if (profile == null)
-            {
-                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
-            }
-
-            return Ok(new Response<FullOrganizerProfileDto> { Status = 200, Message = "Organizer profile retrieved successfully.", Data = profile });
-        }
-
-        [HttpPut("profile")]
-        public async Task<ActionResult<Response<OrganizerProfile>>> UpdateOrganizerProfile([FromBody] OrganizerProfileDto dto)
-        {
-            var userId = GetCurrentUserId();
-            var updatedProfile = await _organizerService.UpdateAsync(userId, dto);
-
-            if (updatedProfile == null)
-            {
-                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
-            }
-
-            return Ok(new Response<OrganizerProfile> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
+            var profile = await _organizerService.GetOrganizerProfileAsync(GetCurrentUserId());
+            if (profile == null) return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found." });
+            return Ok(new Response<OrganizerProfileDto> { Status = 200, Message = "Success", Data = profile });
         }
 
         [HttpPut("profileUserAndOrganizer")]
-        public async Task<ActionResult<Response<bool>>> UpdateProfileAndOrganizer([FromBody] ProfileAndOrganizerDto dto)
+        public async Task<ActionResult<Response<OrganizerProfileDto>>> UpdateContactInfo([FromBody] UpdateOrganizerContactDto dto)
         {
-            var userId = GetCurrentUserId();
-            var updatedProfile = await _organizerService.UpdateProfileAndOrganizerAsync(userId, dto);
-
-            if (!updatedProfile)
-            {
-                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
-            }
-
-            return Ok(new Response<bool> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
+            var profile = await _organizerService.UpdateContactInfoAsync(GetCurrentUserId(), dto);
+            if (profile == null) return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found." });
+            return Ok(new Response<OrganizerProfileDto> { Status = 200, Message = "Contact info updated.", Data = profile });
         }
 
-         [HttpPut("updateTransferBooking")]
-        public async Task<ActionResult<Response<OrganizerProfile?>>> updateTransferBooking([FromBody] TransferBookingDto dto)
+        [HttpPut("updateTransferBooking")]
+        public async Task<ActionResult<Response<OrganizerProfileDto>>> UpdateTransferInfo([FromBody] UpdateOrganizerTransferDto dto)
         {
-            var userId = GetCurrentUserId();
-            var updatedProfile = await _organizerService.UpdateTransferBookingAsync(userId, dto);
+            var profile = await _organizerService.UpdateTransferInfoAsync(GetCurrentUserId(), dto);
+            if (profile == null) return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found." });
+            return Ok(new Response<OrganizerProfileDto> { Status = 200, Message = "Transfer info updated.", Data = profile });
+        }
 
-            if (updatedProfile == null)
-            {
-                return NotFound(new Response<object> { Status = 404, Message = "Organizer profile not found for this user." });
-            }
-
-            return Ok(new Response<OrganizerProfile?> { Status = 200, Message = "Organizer profile updated successfully.", Data = updatedProfile });
+        [HttpPost("register")]
+        public async Task<ActionResult<Response<OrganizerProfileDto>>> Register([FromBody] RegisterOrganizerDto dto)
+        {
+            var (profile, errorMessage) = await _organizerService.RegisterOrganizerAsync(GetCurrentUserId(), dto);
+            if (profile == null) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
+            return Ok(new Response<OrganizerProfileDto> { Status = 200, Message = "Registration submitted.", Data = profile });
         }
     }
 }
