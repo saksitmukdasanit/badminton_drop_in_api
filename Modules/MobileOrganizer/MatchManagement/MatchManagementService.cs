@@ -1101,6 +1101,10 @@ namespace DropInBadAPI.Services
                     _context.Matches.Remove(match);
                     await _context.SaveChangesAsync();
                 }
+
+                // --- FIX: เพิ่มการ Broadcast เพื่อให้แอปฝั่งผู้เล่นรับรู้ว่าทีมถูกลบ/คนถูกย้ายออกหมดแล้ว ---
+                await BroadcastLiveStateChange(sessionId, organizerUserId);
+
                 return null; // ไม่มีผู้เล่น ไม่ต้องสร้าง DTO
             }
 
