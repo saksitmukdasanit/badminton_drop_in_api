@@ -272,7 +272,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 };
                 
                 // --- FIX: คำนวณยอดที่ต้องจ่ายจริงเทียบกับยอดที่จ่ายแล้ว ---
-                int matchesPlayed = s.Matches.Count(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId));
+                int matchesPlayed = s.Matches.Count(m => (m.Status == 2 || m.Status == 1) && m.MatchPlayers.Any(mp => mp.UserId == userId));
                 
                 decimal expectedTotal = 0;
                 bool isUnpaid = false;
@@ -293,7 +293,9 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     decimal billedTotal = validBills.Sum(b => b.TotalAmount);
                     if (billedTotal > expectedTotal) expectedTotal = billedTotal;
 
-                    isUnpaid = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1) || (expectedTotal - paidAmount > 0.1m);
+                    bool hasPendingBill = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1);
+                    bool hasUnpaidBalance = expectedTotal - paidAmount > 0.1m;
+                    isUnpaid = hasPendingBill || (hasUnpaidBalance && (s.Status >= 4 || userParticipation?.CheckoutTime != null));
                 }
 
                 return new UpcomingSessionCardDto
@@ -364,12 +366,27 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             if (!string.IsNullOrWhiteSpace(keyword))
             {
                 var lowerKeyword = keyword.ToLower();
-                query = query.Where(s => s.GroupName.ToLower().Contains(lowerKeyword) ||
-                                         (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)));
+                // พยายามแปลง Keyword เป็นวันที่ (ในกรณีที่ผู้ใช้พิมพ์ค้นหาเป็นวันที่ เช่น 25/12/2023)
+                bool isDateSearch = DateTime.TryParse(keyword, out DateTime parsedDate);
+                DateOnly searchDate = isDateSearch ? DateOnly.FromDateTime(parsedDate) : default;
+
+                query = query.Where(s => 
+                    s.GroupName.ToLower().Contains(lowerKeyword) ||
+                    (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)) ||
+                    (s.CreatedByUser != null && s.CreatedByUser.UserProfile != null && s.CreatedByUser.UserProfile.Nickname.ToLower().Contains(lowerKeyword)) ||
+                    (isDateSearch && s.SessionDate == searchDate)
+                );
             }
 
-            // จัดเรียงและตัดหน้าใน DB (ใช้ AsSplitQuery เพื่อป้องกัน Cartesian Explosion Error ที่ทำให้ List ว่าง)
-            query = query.AsSplitQuery().OrderByDescending(s => s.SessionDate).ThenByDescending(s => s.StartTime);
+            // จัดเรียงตาม Parameter sortBy (ใช้ AsSplitQuery เพื่อป้องกัน Cartesian Explosion Error ที่ทำให้ List ว่าง)
+            if (sortBy == "oldest")
+            {
+                query = query.AsSplitQuery().OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime);
+            }
+            else // Default: "latest"
+            {
+                query = query.AsSplitQuery().OrderByDescending(s => s.SessionDate).ThenByDescending(s => s.StartTime);
+            }
             query = query.Skip((page - 1) * limit).Take(limit);
 
             // ดึงเข้า Memory เพื่อคำนวณยอดเงินที่แม่นยำ
@@ -379,28 +396,39 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var result = rawSessions.Select(s => 
             {
                 var participant = s.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
-                int matchesPlayed = s.Matches.Count(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId));
+                int matchesPlayed = s.Matches.Count(m => (m.Status == 2 || m.Status == 1) && m.MatchPlayers.Any(mp => mp.UserId == userId));
                 
                 decimal expectedTotal = 0;
                 bool isUnpaid = false;
 
-                if (participant != null && participant.Status != 3) // ไม่รวมคนที่ยกเลิกไปแล้ว
+                if (participant != null)
                 {
-                    var validBills = s.ParticipantBills.Where(b => b.UserId == userId && b.Status != 3).ToList();
-                    decimal paidAmount = validBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
-                    
-                    decimal customItems = validBills.SelectMany(b => b.BillLineItems)
-                        .Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"))
-                        .Sum(li => li.Amount);
+                    if (participant.Status != 3) // ไม่รวมคนที่ยกเลิกไปแล้ว
+                    {
+                        var validBills = s.ParticipantBills.Where(b => b.UserId == userId && b.Status != 3).ToList();
+                        decimal paidAmount = validBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
+                        
+                        if (validBills.Any()) 
+                        {
+                            expectedTotal = validBills.Sum(b => b.TotalAmount);
+                        }
+                        else
+                        {
+                            expectedTotal = (s.CourtFeePerPerson ?? 0) + serviceFee;
+                            if (s.CostingMethod == 2) expectedTotal += (s.ShuttlecockFeePerPerson ?? 0);
+                            else expectedTotal += (s.ShuttlecockFeePerPerson ?? 0) * matchesPlayed;
+                        }
 
-                    expectedTotal = (s.CourtFeePerPerson ?? 0) + serviceFee + customItems;
-                    if (s.CostingMethod == 2) expectedTotal += (s.ShuttlecockFeePerPerson ?? 0);
-                    else expectedTotal += (s.ShuttlecockFeePerPerson ?? 0) * matchesPlayed;
-
-                    decimal billedTotal = validBills.Sum(b => b.TotalAmount);
-                    if (billedTotal > expectedTotal) expectedTotal = billedTotal;
-
-                    isUnpaid = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1) || (expectedTotal - paidAmount > 0.1m);
+                        bool hasPendingBill = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1);
+                        bool hasUnpaidBalance = expectedTotal - paidAmount > 0.1m;
+                        isUnpaid = hasPendingBill || (hasUnpaidBalance && (s.Status >= 4 || participant?.CheckoutTime != null));
+                    }
+                    else // กรณี Status == 3 (Refund) ให้แสดงยอดเงินที่ควรจะได้คืน
+                    {
+                        var validBills = s.ParticipantBills.Where(b => b.UserId == userId && b.Status == 2).ToList();
+                        decimal courtFeePaid = validBills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าสนาม").Sum(li => li.Amount);
+                        expectedTotal = courtFeePaid;
+                    }
                 }
 
                 string userStatusStr = participant?.Status switch
@@ -576,16 +604,18 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
             
             int matchesPlayedCount = playedMatches.Count;
-            decimal expectedTotal = (session.CourtFeePerPerson ?? 0) + serviceFee;
-            if (session.CostingMethod == 2) expectedTotal += (session.ShuttlecockFeePerPerson ?? 0);
-            else expectedTotal += (session.ShuttlecockFeePerPerson ?? 0) * matchesPlayedCount;
+            decimal expectedTotal = 0;
 
-            // --- NEW: รวมค่าใช้จ่ายอื่นๆ (Custom Items) ที่ผู้จัดเพิ่มเข้ามา ---
-            decimal customItems = validBills.SelectMany(b => b.BillLineItems)
-                .Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"))
-                .Sum(li => li.Amount);
-            
-            expectedTotal += customItems;
+            if (validBills.Any())
+            {
+                expectedTotal = validBills.Sum(b => b.TotalAmount);
+            }
+            else
+            {
+                expectedTotal = (session.CourtFeePerPerson ?? 0) + serviceFee;
+                if (session.CostingMethod == 2) expectedTotal += (session.ShuttlecockFeePerPerson ?? 0);
+                else expectedTotal += (session.ShuttlecockFeePerPerson ?? 0) * matchesPlayedCount;
+            }
 
             decimal paidAmount = validBills.Where(b => b.Status == 2).Sum(b => b.TotalAmount);
             bool hasPendingBill = validBills.Any(b => b.Status == 1);
@@ -858,20 +888,26 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             var dto = new PlayerBillPreviewDto();
 
-            // 1. Court Fee & Service Fee
-            var initialBill = await _context.ParticipantBills
-                .AsNoTracking()
-                .FirstOrDefaultAsync(b => b.SessionId == sessionId && b.UserId == userId && b.Status != 3);
+            // ดึงประวัติบิลทั้งหมดที่จ่ายแล้ว เพื่อนำมาหักลบกลบยอด
+            var pastBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                .Where(b => b.SessionId == sessionId && b.UserId == userId && b.Status == 2)
+                .ToListAsync();
 
-            // If the initial bill was NOT paid, we need to include its cost.
-            if (initialBill == null || initialBill.Status != 2)
+            bool courtFeePaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าสนาม" || li.Description == "ค่าคอร์ท"));
+            bool servicePaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าธรรมเนียม"));
+
+            // 1. Court Fee & Service Fee (ถ้ายังไม่จ่าย)
+            if (!courtFeePaid)
             {
                 decimal courtFee = session.CourtFeePerPerson ?? 0;
                 if (courtFee > 0)
                 {
                     dto.LineItems.Add(new BillLineItemDto { Description = "ค่าสนาม", Amount = courtFee });
                 }
+            }
 
+            if (!servicePaid)
+            {
                 decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
                 if (serviceFee > 0)
                 {
@@ -879,25 +915,45 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 }
             }
 
-            // 2. Shuttlecock Fee
+            // 2. Shuttlecock Fee (หักลบยอดที่จ่ายแล้ว)
             var playedMatchesCount = await _context.Matches
-                .CountAsync(m => m.SessionId == sessionId && m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId));
+                .CountAsync(m => m.SessionId == sessionId && (m.Status == 2 || m.Status == 1) && m.MatchPlayers.Any(mp => mp.UserId == userId));
 
             decimal shuttleTotal = 0;
             if (session.CostingMethod == 2 && session.ShuttlecockFeePerPerson.HasValue) // Buffet
             {
                 shuttleTotal = session.ShuttlecockFeePerPerson.Value;
-                if (shuttleTotal > 0)
-                {
-                    dto.LineItems.Add(new BillLineItemDto { Description = "ค่าลูกแบด (เหมาจ่าย)", Amount = shuttleTotal });
-                }
             }
             else if (session.ShuttlecockFeePerPerson.HasValue) // Per game
             {
                 shuttleTotal = (session.ShuttlecockFeePerPerson.Value) * playedMatchesCount;
-                if (shuttleTotal > 0)
+            }
+
+            decimal paidShuttle = pastBills.SelectMany(b => b.BillLineItems).Where(li => li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+            decimal dueShuttle = shuttleTotal - paidShuttle;
+
+            if (dueShuttle > 0)
+            {
+                dto.LineItems.Add(new BillLineItemDto { Description = session.CostingMethod == 2 ? "ค่าลูกแบด (เหมาจ่าย)" : $"ค่าลูกแบด ({playedMatchesCount} เกม)", Amount = dueShuttle });
+            }
+
+            // 3. Custom Items (รายการเพิ่มเติมที่ผู้จัดอาจจะเพิ่มไว้ในบิลค้างชำระ)
+            var pendingBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
+                .Where(b => b.SessionId == sessionId && b.UserId == userId && b.Status == 1) // 1 = Pending
+                .ToListAsync();
+
+            if (pendingBills.Any())
+            {
+                var latestPending = pendingBills.OrderByDescending(b => b.CreatedDate).First();
+                var customItems = latestPending.BillLineItems.Where(li => 
+                    li.Description != "ค่าสนาม" && 
+                    li.Description != "ค่าคอร์ท" && 
+                    li.Description != "ค่าธรรมเนียม" && 
+                    !li.Description.StartsWith("ค่าลูกแบด"));
+
+                foreach (var item in customItems)
                 {
-                    dto.LineItems.Add(new BillLineItemDto { Description = $"ค่าลูกแบด ({playedMatchesCount} เกม)", Amount = shuttleTotal });
+                    dto.LineItems.Add(new BillLineItemDto { Description = item.Description, Amount = item.Amount });
                 }
             }
 
@@ -1032,7 +1088,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                     // 2. Shuttlecock Fee
                     var matchesPlayed = await _context.Matches
-                        .Where(m => m.SessionId == session.SessionId && m.Status == 2 &&
+                        .Where(m => m.SessionId == session.SessionId && (m.Status == 2 || m.Status == 1) &&
                                     m.MatchPlayers.Any(mp => mp.UserId == userId))
                         .CountAsync();
 

@@ -424,7 +424,8 @@ namespace DropInBadAPI.Services
 
                 // --- NEW: ดึงข้อมูลแมตช์ที่เล่นจบแล้วเพื่อคำนวณค่าใช้จ่ายตามจริง ---
                 var matchesPlayed = await _context.Matches
-                    .Where(m => m.SessionId == session.SessionId && m.Status == 2 && // 2=Ended
+                    // FIX: นับเกมที่ "กำลังเล่น (1)" และ "จบแล้ว (2)" เพื่อให้คิดเงินได้แม้จะ Checkout ตอนเกมยังไม่จบ
+                    .Where(m => m.SessionId == session.SessionId && (m.Status == 2 || m.Status == 1) &&
                                 m.MatchPlayers.Any(mp => (userId != null && mp.UserId == userId) || (walkinId != null && mp.WalkinId == walkinId)))
                     .Include(m => m.MatchPlayers)
                     .ToListAsync();
@@ -442,123 +443,81 @@ namespace DropInBadAPI.Services
                     bool courtPaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าสนาม"));
                     bool servicePaid = pastBills.Any(b => b.BillLineItems.Any(li => li.Description == "ค่าธรรมเนียม"));
 
+                    // --- FIX: คำนวณค่าพื้นฐานฝั่ง Server เสมอ (ไม่เชื่อใจ Frontend 100% เพื่อป้องกันข้อมูลขาดหาย) ---
+                    if (!courtPaid && session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
+                    {
+                        lineItems.Add(new BillLineItem { Description = "ค่าสนาม", Amount = session.CourtFeePerPerson.Value });
+                        totalAmount += session.CourtFeePerPerson.Value;
+                    }
+
+                    if (!servicePaid)
+                    {
+                        decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                        if (serviceFee > 0)
+                        {
+                            lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
+                            totalAmount += serviceFee;
+                        }
+                    }
+
+                    decimal shuttleTotal = 0;
+                    bool isBuffet = session.CostingMethod == 2;
+
+                    if (isBuffet && session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
+                    {
+                        shuttleTotal = session.ShuttlecockFeePerPerson.Value;
+                    }
+                    else if (session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
+                    {
+                        shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed.Count;
+                    }
+
+                    decimal paidShuttle = pastBills.SelectMany(b => b.BillLineItems).Where(li => li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+                    decimal dueShuttle = shuttleTotal - paidShuttle;
+                    if (dueShuttle > 0)
+                    {
+                        lineItems.Add(new BillLineItem { Description = isBuffet ? "ค่าลูกแบด (เหมาจ่าย)" : $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = dueShuttle });
+                        totalAmount += dueShuttle;
+                    }
+
+                    // --- FIX: รับรายการปรับปรุง (Adjustments) จาก Frontend มาเพิ่ม/ลดยอดเท่านั้น ---
                     if (customCheckout != null && customCheckout.CustomLineItems != null && customCheckout.CustomLineItems.Any())
                     {
                         foreach (var item in customCheckout.CustomLineItems)
                         {
-                            if (courtPaid && item.Description == "ค่าสนาม") continue;
-                            if (servicePaid && item.Description == "ค่าธรรมเนียม") continue;
-                            
-                            // Frontend ดึงข้อมูลจาก Preview ซึ่งคำนวณยอดสุทธิที่ต้องจ่ายเพิ่มมาให้แล้ว 
-                            // จึงสามารถนำ item.Amount มาบันทึกได้เลย ไม่ต้องหักลบซ้ำซ้อน
+                            if (item.Description == "ค่าสนาม" || item.Description == "ค่าคอร์ท" || item.Description == "ค่าธรรมเนียม" || item.Description.StartsWith("ค่าลูกแบด")) continue;
                             lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                             totalAmount += item.Amount;
                         }
                     }
-                    else
+                    else if (!isPreview)
                     {
-                        // --- LOGIC เดิม: คำนวณที่ Server (Fallback) ---
-                        if (!courtPaid && session.CourtFeePerPerson.HasValue && session.CourtFeePerPerson > 0)
+                        var pendingBills = await _context.ParticipantBills.Include(b => b.BillLineItems).Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 1).ToListAsync();
+                        if (pendingBills.Any())
                         {
-                            lineItems.Add(new BillLineItem { Description = "ค่าสนาม", Amount = session.CourtFeePerPerson.Value });
-                            totalAmount += session.CourtFeePerPerson.Value;
-                        }
-
-                        if (!servicePaid)
-                        {
-                            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
-                            if (serviceFee > 0)
-                            {
-                                lineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
-                                totalAmount += serviceFee;
-                            }
-                        }
-
-                        decimal shuttleTotal = 0;
-                        bool isBuffet = session.CostingMethod == 2;
-
-                        if (isBuffet && session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
-                        {
-                            shuttleTotal = session.ShuttlecockFeePerPerson.Value;
-                        }
-                        else if (session.ShuttlecockCostPerUnit.HasValue && session.ShuttlecockCostPerUnit > 0)
-                        {
-                            decimal shuttleCost = 0;
-                            foreach (var match in matchesPlayed)
-                            {
-                                int playersCount = match.MatchPlayers.Count;
-                                if (playersCount > 0)
-                                {
-                                    decimal matchCost = (match.ShuttlecocksUsed * session.ShuttlecockCostPerUnit.Value) / playersCount;
-                                    shuttleCost += matchCost;
-                                }
-                            }
-
-                            shuttleTotal = Math.Ceiling(shuttleCost);
-                        }
-                        // --- NEW: เพิ่ม Logic สำหรับคิดค่าลูกแบดแบบ "ต่อคนต่อเกม" (CostingMethod = 1 หรือ null) ---
-                        else if (session.ShuttlecockFeePerPerson.HasValue && session.ShuttlecockFeePerPerson > 0)
-                        {
-                            // คิดตามจำนวนเกมที่เล่นจริง
-                            shuttleTotal = session.ShuttlecockFeePerPerson.Value * matchesPlayed.Count;
-                        }
-
-                        decimal paidShuttle = pastBills
-                            .SelectMany(b => b.BillLineItems)
-                            .Where(li => li.Description.StartsWith("ค่าลูกแบด"))
-                            .Sum(li => li.Amount);
-
-                        decimal dueShuttle = shuttleTotal - paidShuttle;
-                        if (dueShuttle > 0)
-                        {
-                            lineItems.Add(new BillLineItem { Description = isBuffet ? "ค่าลูกแบด (เหมาจ่าย)" : $"ค่าลูกแบด ({matchesPlayed.Count} เกม)", Amount = dueShuttle });
-                            totalAmount += dueShuttle;
-                        }
-
-                        if (isPreview)
-                        {
-                            // --- FIX: โหมด Preview (ดูประวัติ) ให้ดึงรายการ Custom ทุกบิลที่ยังไม่ถูกยกเลิก (ทั้งจ่ายแล้วและยังไม่จ่าย) มาแสดงด้วย ---
-                            var allBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
-                                .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status != 3) // ไม่เอา Cancelled
-                                .ToListAsync();
-
-                            var allCustomItems = allBills.SelectMany(b => b.BillLineItems)
-                                .Where(li => li.Description != "ค่าสนาม" &&
-                                             li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
-
-                            foreach (var item in allCustomItems)
+                            var latestPending = pendingBills.OrderByDescending(b => b.CreatedDate).First();
+                            var customItems = latestPending.BillLineItems.Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
+                            foreach (var item in customItems)
                             {
                                 lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                                 totalAmount += item.Amount;
                             }
-                        }
-                        else
-                        {
-                        // --- โหมดคิดเงินจริง: ดึงบิลที่ "ค้างชำระ" มาคิดยอดและยกเลิกบิลเก่า เพื่อไม่ให้ยอดซ้ำซ้อน ---
-                        var pendingBills = await _context.ParticipantBills.Include(b => b.BillLineItems)
-                                .Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 1) // 1 = Pending
-                            .ToListAsync();
-
-                        if (pendingBills.Any())
-                            {
-                            var latestPending = pendingBills.OrderByDescending(b => b.CreatedDate).First();
-                            var customItems = latestPending.BillLineItems.Where(li =>
-                                    li.Description != "ค่าสนาม" &&
-                                    li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
-                                foreach (var item in customItems)
-                                {
-                                    lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
-                                    totalAmount += item.Amount;
-                                }
-
-                            // ยกเลิกบิลที่ค้างชำระทั้งหมด เพื่อสร้างบิลใหม่ใบเดียว
-                            foreach (var pb in pendingBills)
-                            {
-                                pb.Status = 3; // 3 = Cancelled
-                            }
-                            }
+                            foreach (var pb in pendingBills) pb.Status = 3;
                         }
                     }
+
+                    if (isPreview)
+                    {
+                        var allBills = await _context.ParticipantBills.Include(b => b.BillLineItems).Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToListAsync();
+                        var allCustomItems = allBills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าคอร์ท" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด"));
+                        foreach (var item in allCustomItems)
+                        {
+                            lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
+                            totalAmount += item.Amount;
+                        }
+                    }
+
+                    if (totalAmount < 0) totalAmount = 0;
 
                     // --- ถ้าเป็น Preview ให้ส่งกลับเลย ไม่ต้องบันทึก ---
                     if (isPreview)

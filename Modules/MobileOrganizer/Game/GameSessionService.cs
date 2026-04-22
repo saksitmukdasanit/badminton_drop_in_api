@@ -34,7 +34,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             var overlappingSession = await _context.GameSessions
                 .Include(s => s.Venue)
                 .Where(s => s.CreatedByUserId == organizerUserId
-                         && s.Status != 3 // ไม่เช็คก๊วนที่ยกเลิกไปแล้ว
+                         && s.Status != 3 && s.Status != 4 // ไม่เช็คก๊วนที่ยกเลิกหรือจบไปแล้ว
                          && s.SessionDate == dto.SessionDate
                          && s.Venue.GooglePlaceId == dto.VenueData.GooglePlaceId
                          && s.StartTime < dto.EndTime
@@ -397,7 +397,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .Include(s => s.Venue)
                 .Where(s => s.CreatedByUserId == organizerUserId
                          && s.SessionId != sessionId // ยกเว้นก๊วนที่กำลังแก้ไขอยู่
-                         && s.Status != 3
+                         && s.Status != 3 && s.Status != 4 // ไม่เช็คก๊วนที่ยกเลิกหรือจบไปแล้ว
                          && s.SessionDate == dto.SessionDate
                          && s.Venue.GooglePlaceId == dto.VenueData.GooglePlaceId
                          && s.StartTime < dto.EndTime
@@ -1033,13 +1033,28 @@ namespace DropInBadAPI.Service.Mobile.Game
             return sessions;
         }
 
-        public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId)
+        public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId, string? keyword = null, int page = 1, int limit = 10)
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
             decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
 
-            var sessions = await _context.GameSessions
-               .Where(s => s.CreatedByUserId == organizerUserId && (s.SessionDate < today || s.Status == 3 || s.Status == 4)) // กรองเฉพาะอดีต, ยกเลิก(3), หรือก๊วนที่กดจบแล้ว(4)
+            IQueryable<GameSession> query = _context.GameSessions
+               .Where(s => s.CreatedByUserId == organizerUserId && (s.SessionDate < today || s.Status == 3 || s.Status == 4)); // กรองเฉพาะอดีต, ยกเลิก(3), หรือก๊วนที่กดจบแล้ว(4)
+
+            if (!string.IsNullOrWhiteSpace(keyword))
+            {
+                var lowerKeyword = keyword.ToLower();
+                bool isDateSearch = DateTime.TryParse(keyword, out DateTime parsedDate);
+                DateOnly searchDate = isDateSearch ? DateOnly.FromDateTime(parsedDate) : default;
+
+                query = query.Where(s => 
+                    s.GroupName.ToLower().Contains(lowerKeyword) ||
+                    (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)) ||
+                    (isDateSearch && s.SessionDate == searchDate)
+                );
+            }
+
+            var sessions = await query
                .Include(s => s.Venue)
                .Include(s => s.SessionParticipants)
                .Include(s => s.SessionWalkinGuests)
@@ -1048,6 +1063,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion
                .OrderByDescending(s => s.SessionDate) // เรียงจากล่าสุดไปเก่าสุด
                .ThenByDescending(s => s.StartTime)
+               .Skip((page - 1) * limit).Take(limit)
                .ToListAsync();
 
             var result = new List<OrganizerGameSessionDto>();
@@ -1068,11 +1084,24 @@ namespace DropInBadAPI.Service.Mobile.Game
 
                 (decimal paid, decimal total) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
                 {
-                    decimal cPart = courtFeePerPerson;
-                    decimal sPart = s.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
-
                     var bills = s.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
                     
+                    decimal cPart = courtFeePerPerson;
+                    decimal sPart = s.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
+                    decimal customItems = 0;
+
+                    // --- FIX: เชื่อถือข้อมูลจาก Database (BillLineItems) ถ้ามีการสร้างบิลแล้ว ---
+                    if (bills.Any())
+                    {
+                        cPart = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าสนาม" || li.Description == "ค่าคอร์ท").Sum(li => li.Amount);
+                        if (cPart == 0 && courtFeePerPerson > 0) cPart = courtFeePerPerson;
+
+                        sPart = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+                        if (sPart == 0) sPart = s.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
+
+                        customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าคอร์ท" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+                    }
+
                     // หักลบค่าธรรมเนียมแอปออก เพื่อให้แสดงเฉพาะรายรับของผู้จัดจริงๆ
                     decimal serviceFeeTotal = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
                     decimal serviceFeePaid = bills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
@@ -1082,8 +1111,6 @@ namespace DropInBadAPI.Service.Mobile.Game
 
                     decimal billedTotal = bills.Sum(b => b.TotalAmount) - serviceFeeTotal;
                     if (billedTotal < 0) billedTotal = 0;
-
-                    decimal customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
 
                     decimal totalVal = cPart + sPart + customItems;
                     if (billedTotal > totalVal) totalVal = billedTotal;
@@ -1298,11 +1325,24 @@ namespace DropInBadAPI.Service.Mobile.Game
             // Helper ใหม่: คำนวณยอดเงินรายคนและแยกส่วนประกอบ
             (decimal paid, decimal total, decimal courtPart, decimal shuttlePart, decimal srvFee, decimal netTotal, decimal netPaid, decimal netUnpaid) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
             {
+                var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
+                
                 // 1. คำนวณค่าใช้จ่ายมาตรฐาน
                 decimal cPart = courtFeePerPerson;
                 decimal sPart = session.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
+                decimal customItems = 0;
 
-                var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
+                // --- FIX: เชื่อถือข้อมูลจาก Database (BillLineItems) ถ้ามีการสร้างบิลแล้ว ---
+                if (bills.Any())
+                {
+                    cPart = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าสนาม" || li.Description == "ค่าคอร์ท").Sum(li => li.Amount);
+                    if (cPart == 0 && courtFeePerPerson > 0) cPart = courtFeePerPerson; // Fallback
+
+                    sPart = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+                    if (sPart == 0) sPart = session.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed; // Fallback
+
+                    customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าคอร์ท" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
+                }
                 
                 // หักลบค่าธรรมเนียมแอปออก เพื่อให้แสดงเฉพาะรายรับของผู้จัด
                 decimal serviceFeeTotal = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
@@ -1313,8 +1353,6 @@ namespace DropInBadAPI.Service.Mobile.Game
 
                 decimal billedTotal = bills.Sum(b => b.TotalAmount) - serviceFeeTotal;
                 if (billedTotal < 0) billedTotal = 0;
-
-                decimal customItems = bills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
 
                 decimal totalVal = cPart + sPart + customItems;
                 if (billedTotal > totalVal) totalVal = billedTotal;
@@ -1450,6 +1488,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 CourtFeePerPerson = courtFeePerPerson,
                 ShuttlecockFeePerPerson = shuttleFeePerPerson,
                 ShuttlecockCostPerUnit = shuttleCostPerUnit, // ส่งราคาทุน
+                CostingMethod = session.CostingMethod.HasValue ? (int)session.CostingMethod.Value : null,
                 TotalCourtCost = totalCourtCost,
                 TotalCourtIncome = aggTotalCourtIncome, // ยอดรวมจากทุกคน
                 TotalShuttlecockFee = aggTotalShuttleFee, // ยอดรวมจากทุกคน
@@ -1658,8 +1697,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             // สมาชิก
             foreach (var p in session.SessionParticipants.Where(p => p.Status == 1))
             {
-                // กรองเฉพาะคนที่ Check-in แล้วเท่านั้น
-                if (p.CheckinTime == null) continue;
+                // FIX: กรองเฉพาะคนที่ Check-in แล้ว และยังไม่ได้ Checkout ออกไป
+                if (p.CheckinTime == null || p.CheckoutTime != null) continue;
 
                 if (busyUserIds.Contains(p.UserId) || IsExcluded("Member", p.ParticipantId)) continue;
                 
@@ -1676,8 +1715,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             // Walk-in
             foreach (var g in session.SessionWalkinGuests.Where(g => g.Status == 1))
             {
-                // กรองเฉพาะคนที่ Check-in แล้วเท่านั้น (เผื่อกรณีข้อมูลเก่า หรือมีการแก้ Logic ในอนาคต)
-                if (g.CheckinTime == null) continue;
+                // FIX: กรองเฉพาะคนที่ Check-in แล้ว และยังไม่ได้ Checkout ออกไป
+                if (g.CheckinTime == null || g.CheckoutTime != null) continue;
 
                 if (busyWalkinIds.Contains(g.WalkinId) || IsExcluded("Guest", g.WalkinId)) continue;
 

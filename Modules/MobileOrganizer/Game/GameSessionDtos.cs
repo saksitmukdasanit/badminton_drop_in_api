@@ -162,6 +162,7 @@ namespace DropInBadAPI.Dtos
         public decimal CourtFeePerPerson { get; set; }
         public decimal ShuttlecockFeePerPerson { get; set; }
         public decimal ShuttlecockCostPerUnit { get; set; }
+        public int? CostingMethod { get; set; }
         public decimal TotalCourtCost { get; set; }
         public decimal TotalCourtIncome { get; set; }
         public decimal TotalShuttlecockFee { get; set; }

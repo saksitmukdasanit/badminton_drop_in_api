@@ -12,7 +12,7 @@ namespace DropInBadAPI.Service.Mobile.Game
         Task<IEnumerable<UpcomingSessionCardDto>> GetMyUpcomingSessionsAsync(int organizerUserId);
         Task<(ParticipantDto? Data, string ErrorMessage)> AddGuestAsync(int sessionId, int organizerUserId, AddGuestDto dto);
         Task<(bool Success, string ErrorMessage)> UpdateParticipantSkillLevelAsync(int sessionId, string participantType, int participantId, int? newSkillLevelId, int organizerUserId);
-        Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId);
+        Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId, string? keyword = null, int page = 1, int limit = 10);
         Task<(bool Success, string ErrorMessage)> StartSessionAsync(int sessionId, int organizerUserId);
         Task<GameSessionAnalyticsDto?> GetSessionAnalyticsAsync(int sessionId, int organizerUserId);
         Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId);

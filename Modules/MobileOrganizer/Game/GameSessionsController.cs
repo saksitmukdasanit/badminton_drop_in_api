@@ -18,9 +18,9 @@ namespace DropInBadAPI.Controllers.Mobile
 
         // GET: api/GameSessions/my-history
         [HttpGet("my-history")]
-        public async Task<ActionResult<Response<IEnumerable<OrganizerGameSessionDto>>>> GetMyHistory()
+        public async Task<ActionResult<Response<IEnumerable<OrganizerGameSessionDto>>>> GetMyHistory([FromQuery] string? keyword = null, [FromQuery] int page = 1, [FromQuery] int limit = 10)
         {
-            var sessions = await _sessionService.GetMyPastSessionsAsync(GetCurrentUserId());
+            var sessions = await _sessionService.GetMyPastSessionsAsync(GetCurrentUserId(), keyword, page, limit);
             var response = new Response<IEnumerable<OrganizerGameSessionDto>>
             {
                 Status = 200,
