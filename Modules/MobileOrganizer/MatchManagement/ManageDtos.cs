@@ -116,6 +116,32 @@ namespace DropInBadAPI.Dtos
         public decimal Amount { get; set; }
     }
 
+    // --- NEW: DTO สำหรับหน้า Finance ผู้จัด ---
+    public class OrganizerFinanceDashboardDto
+    {
+        public decimal Balance { get; set; }
+        public decimal TotalIncome { get; set; }
+        public decimal PendingAmount { get; set; }
+        public decimal ChartTotalIncome { get; set; }
+        public List<FinanceChartGameDto> LatestGames { get; set; } = new();
+        public string? BankName { get; set; }
+        public string? BankAccountNumber { get; set; }
+        public string? BankAccountPhotoUrl { get; set; }
+        public string? NationalId { get; set; }
+    }
+
+    public class FinanceChartGameDto
+    {
+        public string Name { get; set; }
+        public int PlayersCount { get; set; }
+        public int PaidCount { get; set; }
+    }
+
+    public class OrganizerWithdrawRequestDto
+    {
+        public decimal Amount { get; set; }
+    }
+
     // ====== DTOs for NEW APIs ======
 
     // DTO สำหรับ Scan QR Code (รับ UserId/PublicId)

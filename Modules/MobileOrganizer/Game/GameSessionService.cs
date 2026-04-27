@@ -30,6 +30,11 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto)
         {
+            if (dto.StartTime >= dto.EndTime)
+            {
+                throw new Exception("เวลาเริ่มต้น ต้องน้อยกว่า เวลาสิ้นสุด");
+            }
+
             // --- 1. เช็คเวลาและสนามทับซ้อนก่อนสร้าง ---
             var overlappingSession = await _context.GameSessions
                 .Include(s => s.Venue)
@@ -392,6 +397,11 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public async Task<ManageGameSessionDto?> UpdateSessionAsync(int sessionId, int organizerUserId, SaveGameSessionDto dto)
         {
+            if (dto.StartTime >= dto.EndTime)
+            {
+                throw new Exception("เวลาเริ่มต้น ต้องน้อยกว่า เวลาสิ้นสุด");
+            }
+
             // --- 1. เช็คเวลาและสนามทับซ้อนก่อนแก้ไข ---
             var overlappingSession = await _context.GameSessions
                 .Include(s => s.Venue)
@@ -545,11 +555,71 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public async Task<bool> CancelSessionByOrganizerAsync(int sessionId, int organizerUserId)
         {
-            var session = await _context.GameSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+            var session = await _context.GameSessions
+                .Include(s => s.ParticipantBills) // Include บิลเพื่อดึงมาคืนเงิน
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+
             if (session == null) return false;
 
             session.Status = 3; // 3 = Cancelled
             session.UpdatedDate = DateTime.UtcNow;
+
+            // --- NEW: ระบบคืนเงินเข้า Wallet อัตโนมัติ (กรณีผู้จัดยกเลิก คืนเต็มจำนวน) ---
+            var paidBills = session.ParticipantBills.Where(b => b.Status == 2).ToList();
+            
+            foreach (var bill in paidBills)
+            {
+                if (bill.UserId.HasValue && bill.TotalAmount > 0)
+                {
+                    int refundUserId = bill.UserId.Value;
+                    decimal refundAmount = bill.TotalAmount; // คืนเต็มจำนวน
+
+                    // 1. หา Wallet ของ User (ถ้าไม่มีให้สร้างใหม่)
+                    var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == refundUserId);
+                    if (wallet == null)
+                    {
+                        wallet = new UserWallet { UserId = refundUserId, Balance = 0 };
+                        await _context.UserWallets.AddAsync(wallet);
+                    }
+
+                    // 2. เติมเงินเข้า Wallet
+                    wallet.Balance += refundAmount;
+                    wallet.UpdatedDate = DateTime.UtcNow;
+
+                    // --- FIX: ดึงเงินกลับจาก Wallet ผู้จัด (ยอมให้ติดลบได้) ---
+                    var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                    decimal serviceFee = serviceFeeItem?.Amount ?? 0;
+                    decimal amountToDeductFromOrg = refundAmount - serviceFee; // ดึงกลับเฉพาะส่วนที่ผู้จัดได้ไป
+
+                    if (amountToDeductFromOrg > 0)
+                    {
+                        var orgWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == organizerUserId);
+                        if (orgWallet == null)
+                        {
+                            orgWallet = new UserWallet { UserId = organizerUserId, Balance = 0 };
+                            await _context.UserWallets.AddAsync(orgWallet);
+                        }
+                        orgWallet.Balance -= amountToDeductFromOrg; // ยอมให้ติดลบ
+                        orgWallet.UpdatedDate = DateTime.UtcNow;
+                        await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = orgWallet, Amount = amountToDeductFromOrg, TransactionType = 2, Description = $"หักเงินคืนผู้เล่น (ยกเลิกก๊วน): {session.GroupName}", ReferenceId = sessionId });
+                    }
+                    // ----------------------------------------------------
+
+                    // 3. สร้างประวัติ Transaction
+                    var transaction = new WalletTransaction
+                    {
+                        Wallet = wallet, // ใช้ Navigation Property เพื่อให้ EF ผูก ID ให้อัตโนมัติ
+                        Amount = refundAmount,
+                        TransactionType = 1, // 1 = IN (Refund)
+                        Description = $"คืนเงินกรณียกเลิกก๊วน: {session.GroupName}",
+                        ReferenceId = sessionId,
+                    };
+                    await _context.WalletTransactions.AddAsync(transaction);
+
+                    // 4. เปลี่ยนสถานะบิลเป็น 3 (Cancelled) เพื่อล้างยอดออกจากระบบบัญชี
+                    bill.Status = 3;
+                }
+            }
 
             // --- แจ้งเตือนผู้เล่นทุกคนในก๊วนเกี่ยวกับการยกเลิก ---
             var participantUserIds = await _context.SessionParticipants
@@ -1738,124 +1808,21 @@ namespace DropInBadAPI.Service.Mobile.Game
 
             var selectedPlayers = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
 
-            if (dto.IsMixedMode)
-            {
-                // โหมดผสม (Mixed): แก้ไขใหม่ - เพิ่มความหลากหลายเพื่อไม่ให้เจอแต่คนเดิมๆ
-                var firstPlayer = baseSortedPlayers.First();
-                selectedPlayers.Add(firstPlayer);
-
-                // หาประวัติแมตช์ที่ firstPlayer เคยเล่น
-                var firstPlayerMatches = session.Matches
-                    .Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => 
-                        (firstPlayer.UserId.HasValue && mp.UserId == firstPlayer.UserId.Value) ||
-                        (firstPlayer.WalkinId.HasValue && mp.WalkinId == firstPlayer.WalkinId.Value)))
-                    .ToList();
-
-                var playedWithFirstPlayerCount = new Dictionary<string, int>();
-                foreach (var rp in baseSortedPlayers.Skip(1))
-                {
-                    string rpKey = $"{rp.Type}_{rp.Id}";
-                    int count = firstPlayerMatches.Count(m => m.MatchPlayers.Any(mp => 
-                        (rp.UserId.HasValue && mp.UserId == rp.UserId.Value) ||
-                        (rp.WalkinId.HasValue && mp.WalkinId == rp.WalkinId.Value)));
-                    playedWithFirstPlayerCount[rpKey] = count;
-                }
-
-                var remainingPlayers = baseSortedPlayers.Skip(1)
-                    .OrderBy(p => p.Games) // 1. ต้องให้ความสำคัญกับจำนวนเกมที่เล่นน้อยที่สุดก่อนเป็นอันดับแรก!
-                    .ThenBy(p => playedWithFirstPlayerCount[$"{p.Type}_{p.Id}"]) // 2. คนที่เคยเล่นด้วยกันน้อยที่สุด (เพิ่มความหลากหลาย)
-                    .ThenBy(p => Math.Abs(p.Skill - firstPlayer.Skill)) // 3. ฝีมือใกล้เคียงกัน
-                    .ThenBy(p => p.Wait)
-                    .Take(3)
-                    .ToList();
-
-                selectedPlayers.AddRange(remainingPlayers);
-            }
-            else
-            {
-                // NEW LOGIC for Skill-based matching
-                // 1. Group available players by skill level
-                var playersBySkill = baseSortedPlayers
-                    .GroupBy(p => p.Skill)
-                    .Select(g => new {
-                        Skill = g.Key,
-                        Players = g.ToList(),
-                        Count = g.Count(),
-                        // Find the earliest wait time in the group to prioritize the group that has been waiting the longest
-                        MinWaitTime = g.Min(p => p.Wait) 
-                    })
-                    .OrderBy(g => g.MinWaitTime) // Prioritize groups that have members waiting longer
-                    .ToList();
-
-                // 2. Find the first group with 4 or more players
-                var bestGroup = playersBySkill.FirstOrDefault(g => g.Count >= 4);
-
-                if (bestGroup != null)
-                {
-                    // เพื่อความหลากหลายในกลุ่มฝีมือเดียวกัน ถ้ามีมากกว่า 4 คน ให้เรียงกระจายคนเล่นซ้ำออกไป
-                    var firstInGroup = bestGroup.Players.First();
-                    selectedPlayers.Add(firstInGroup);
-
-                    var firstPlayerMatches = session.Matches
-                        .Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => 
-                            (firstInGroup.UserId.HasValue && mp.UserId == firstInGroup.UserId.Value) ||
-                            (firstInGroup.WalkinId.HasValue && mp.WalkinId == firstInGroup.WalkinId.Value)))
-                        .ToList();
-
-                    var remainingInGroup = bestGroup.Players.Skip(1)
-                        .OrderBy(p => p.Games)
-                        .ThenBy(rp => firstPlayerMatches.Count(m => m.MatchPlayers.Any(mp => 
-                            (rp.UserId.HasValue && mp.UserId == rp.UserId.Value) ||
-                            (rp.WalkinId.HasValue && mp.WalkinId == rp.WalkinId.Value))))
-                        .ThenBy(p => p.Wait)
-                        .Take(3).ToList();
-                    
-                    selectedPlayers.AddRange(remainingInGroup);
-                }
-                else
-                {
-                    // Fallback: If no group of 4 with the same skill exists, use the old logic (closest skill to the top of the queue).
-                    var firstPlayer = baseSortedPlayers.First();
-                    selectedPlayers.Add(firstPlayer);
-
-                    var remainingPlayers = baseSortedPlayers.Skip(1)
-                        .OrderBy(p => p.Games) // FIX: ต้องเอาจำนวนเกมขึ้นก่อน
-                        .ThenBy(p => Math.Abs(p.Skill - firstPlayer.Skill))
-                        .ThenBy(p => p.Wait)
-                        .Take(3)
-                        .ToList();
-
-                    selectedPlayers.AddRange(remainingPlayers);
-                }
-            }
-
-            if (selectedPlayers.Count < 4)
-            {
-                return (false, "Not enough players to form a match with the selected criteria.");
-            }
-
-            // 4. จัดทีม (Algorithm) with variety
-            var teamA = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-            var teamB = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-
-            // --- NEW: Logic for pairing with variety ---
-
-            var selectedUserIds = selectedPlayers.Where(p => p.UserId.HasValue).Select(p => p.UserId.Value).ToList();
-            var selectedWalkinIds = selectedPlayers.Where(p => p.WalkinId.HasValue).Select(p => p.WalkinId.Value).ToList();
-
-            var matchHistoryGroups = await _context.MatchPlayers
-                .Where(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 2 &&
-                             ((mp.UserId.HasValue && selectedUserIds.Contains(mp.UserId.Value)) ||
-                              (mp.WalkinId.HasValue && selectedWalkinIds.Contains(mp.WalkinId.Value))))
-                .GroupBy(mp => mp.MatchId)
-                .Select(g => g.Select(p => new { p.Team, p.UserId, p.WalkinId }).ToList())
-                .ToListAsync();
+            // --- NEW: Logic for pairing with variety and skill ---
 
             Func<int?, int?, string> getPlayerIdentifier = (userId, walkinId) => userId.HasValue ? $"u_{userId.Value}" : $"w_{walkinId.Value}";
             Func<string, string, string> getPairKey = (id1, id2) => string.Compare(id1, id2) < 0 ? $"{id1}|{id2}" : $"{id2}|{id1}";
 
+            // ดึงประวัติการเล่นทั้งหมดใน Session นี้ล่วงหน้า เพื่อใช้คำนวณความหลากหลาย
+            var matchHistoryGroups = await _context.MatchPlayers
+                .Where(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 2)
+                .GroupBy(mp => mp.MatchId)
+                .Select(g => g.Select(p => new { p.Team, p.UserId, p.WalkinId }).ToList())
+                .ToListAsync();
+
             var teammateHistory = new Dictionary<string, int>();
             var opponentHistory = new Dictionary<string, int>();
+            var matchTogetherHistory = new Dictionary<string, int>(); // เคยลงสนามพร้อมกัน
 
             foreach (var group in matchHistoryGroups)
             {
@@ -1869,6 +1836,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                         var p2_id = getPlayerIdentifier(player2InHistory.UserId, player2InHistory.WalkinId);
                         var pairKey = getPairKey(p1_id, p2_id);
 
+                        matchTogetherHistory[pairKey] = matchTogetherHistory.GetValueOrDefault(pairKey, 0) + 1;
+
                         if (player1InHistory.Team == player2InHistory.Team)
                         {
                             teammateHistory[pairKey] = teammateHistory.GetValueOrDefault(pairKey, 0) + 1;
@@ -1880,6 +1849,75 @@ namespace DropInBadAPI.Service.Mobile.Game
                     }
                 }
             }
+
+            // 1. เลือกคนแรก (คนที่รอนานที่สุด/เกมน้อยที่สุด)
+            var firstPlayer = baseSortedPlayers.First();
+            selectedPlayers.Add(firstPlayer);
+
+            var remainingPool = baseSortedPlayers.Skip(1).ToList();
+
+            // 2. เลือกอีก 3 คน ตามโหมดที่เลือก โดยอิงจากคนแรก
+            for (int i = 0; i < 3; i++)
+            {
+                var bestCandidate = remainingPool
+                    .OrderBy(c => 
+                    {
+                        // 2.1 Queue Score (คิว): สำคัญที่สุด ให้คนรอนานได้ลงก่อน (บวกแต้มตามลำดับ)
+                        int queueScore = baseSortedPlayers.IndexOf(c) * 10;
+                        
+                        // 2.2 History Score (ประวัติ): พยายามหลีกเลี่ยงคนที่เคยเล่นด้วยกันแล้ว
+                        int historyCount = 0;
+                        var c_id = getPlayerIdentifier(c.UserId, c.WalkinId);
+                        foreach (var s in selectedPlayers)
+                        {
+                            var s_id = getPlayerIdentifier(s.UserId, s.WalkinId);
+                            historyCount += matchTogetherHistory.GetValueOrDefault(getPairKey(c_id, s_id), 0);
+                        }
+                        int historyScore = historyCount * 40; // Penalty หนักถ้าเคยเล่นด้วยกันแล้ว
+
+                        // 2.3 Skill Score (ระดับมือ): จัดตามโหมด
+                        int skillScore = 0;
+                        if (dto.IsMixedMode)
+                        {
+                            // โหมดผสม: ต้องการความต่างของระดับมือ (เวลสูง คู่ เวลต่ำ)
+                            if (selectedPlayers.Count == 1) 
+                            {
+                                // คนที่ 2 (ฝั่งตรงข้ามคนแรก): หาระดับมือให้ห่างจากคนแรกมากที่สุด (ติดลบ = ดึงคนเวลห่างขึ้นมา)
+                                skillScore = -Math.Abs(c.Skill - selectedPlayers[0].Skill) * 15; 
+                            }
+                            else if (selectedPlayers.Count == 2) 
+                            {
+                                // คนที่ 3 (คู่คนแรก): หาระดับมือให้ใกล้เคียงคนแรก (เพื่อให้ฝีมือแต่ละทีมสมดุล)
+                                skillScore = Math.Abs(c.Skill - selectedPlayers[0].Skill) * 20;
+                            }
+                            else 
+                            {
+                                // คนที่ 4 (คู่คนที่ 2): หาระดับมือให้ใกล้เคียงคนที่ 2
+                                skillScore = Math.Abs(c.Skill - selectedPlayers[1].Skill) * 20;
+                            }
+                        }
+                        else
+                        {
+                            // โหมดตามมือ: หาระดับมือให้ใกล้เคียงกับคนแรกมากที่สุด
+                            skillScore = Math.Abs(c.Skill - selectedPlayers[0].Skill) * 30;
+                        }
+
+                        return queueScore + historyScore + skillScore;
+                    })
+                    .First();
+
+                selectedPlayers.Add(bestCandidate);
+                remainingPool.Remove(bestCandidate);
+            }
+
+            if (selectedPlayers.Count < 4)
+            {
+                return (false, "Not enough players to form a match with the selected criteria.");
+            }
+
+            // 4. จัดทีม (Algorithm) with variety
+            var teamA = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
+            var teamB = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
 
             var sortedSelectedPlayers = selectedPlayers.OrderBy(p => p.Skill).ToList();
             var p1 = sortedSelectedPlayers[0]; var p2 = sortedSelectedPlayers[1]; var p3 = sortedSelectedPlayers[2]; var p4 = sortedSelectedPlayers[3];

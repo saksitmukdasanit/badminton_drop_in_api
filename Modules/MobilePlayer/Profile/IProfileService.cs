@@ -7,5 +7,7 @@ namespace DropInBadAPI.Service.Mobile.Profile
         Task<UserProfileDto?> GetUserProfileAsync(int userId);
         Task<UserProfileDto?> UpdateUserProfileAsync(int userId, UpdateProfileDto dto);
         Task<(bool Success, string ErrorMessage)> UpdatePhoneNumberAsync(int userId, UpdatePhoneNumberDto dto);
+        Task<PlayerBankDto?> GetBankInfoAsync(int userId);
+        Task<PlayerBankDto?> UpdateBankInfoAsync(int userId, UpdatePlayerBankDto dto);
     }
 }

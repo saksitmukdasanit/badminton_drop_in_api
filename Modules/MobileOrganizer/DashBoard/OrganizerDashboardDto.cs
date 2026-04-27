@@ -21,6 +21,8 @@ namespace DropInBadAPI.Dtos
         public int TotalSessionsHosted { get; init; }
         public int TotalPlayersJoined { get; init; }
         public decimal TotalNetIncome { get; init; } // รายได้สุทธิ (หักค่าธรรมเนียมแล้ว)
+        public decimal WalletBalance { get; init; } // เงินในกระเป๋าที่ถอนได้
+        public decimal TotalPendingIncome { get; init; } // ยอดค้างชำระจากผู้เล่น
         public int FollowersCount { get; init; }
     }
 }

@@ -31,6 +31,8 @@ public partial class OrganizerProfile
 
     public short Status { get; set; }
 
+    public string? XenditAccountId { get; set; }
+
     public DateTime CreatedDate { get; set; }
 
     public int? CreatedBy { get; set; }

@@ -31,6 +31,14 @@ public partial class UserProfile
 
     public DateTime? OtpexpiryDate { get; set; }
 
+    public int? BankId { get; set; }
+
+    public string? BankAccountNumber { get; set; }
+
+    public string? BankAccountName { get; set; }
+
+    public string? BankAccountPhotoUrl { get; set; }
+
     public DateTime CreatedDate { get; set; }
 
     public int? CreatedBy { get; set; }

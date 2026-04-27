@@ -1,6 +1,7 @@
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
+using DropInBadAPI.Service.Mobile.Game;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
@@ -14,10 +15,12 @@ namespace DropInBadAPI.Controllers.Mobile
     {
         private readonly IMatchManagementService _matchService;
         private readonly IMatchRecommenderService _recommenderService;
-        public MatchManagementController(IMatchManagementService matchService, IMatchRecommenderService recommenderService)
+        private readonly IGameSessionService _sessionService;
+        public MatchManagementController(IMatchManagementService matchService, IMatchRecommenderService recommenderService, IGameSessionService sessionService)
         {
             _matchService = matchService;
             _recommenderService = recommenderService;
+            _sessionService = sessionService;
         }
         private int GetCurrentUserId() => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
@@ -105,12 +108,12 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPost("bills/{billId}/pay")]
         public async Task<ActionResult<Response<object>>> PayBill(int billId, [FromBody] PaymentRequestDto dto)
         {
-            var success = await _matchService.PayBillAsync(billId, GetCurrentUserId(), dto);
+            var (success, message, qrCodeStr) = await _matchService.PayBillAsync(billId, GetCurrentUserId(), dto);
             if (!success)
             {
-                return BadRequest(new Response<object> { Status = 400, Message = "Payment failed or bill not found." });
+                return BadRequest(new Response<object> { Status = 400, Message = message });
             }
-            return Ok(new Response<object> { Status = 200, Message = "Payment recorded successfully." });
+            return Ok(new Response<object> { Status = 200, Message = message, Data = new { QrCode = qrCodeStr } });
         }
 
         // --- NEW: API สำหรับยกเลิกบิล ---
@@ -121,6 +124,21 @@ namespace DropInBadAPI.Controllers.Mobile
             var success = await _matchService.CancelBillAsync(billId, GetCurrentUserId());
             if (!success) return BadRequest(new Response<object> { Status = 400, Message = "Failed to cancel bill." });
             return Ok(new Response<object> { Status = 200, Message = "Bill cancelled." });
+        }
+
+        [HttpGet("organizer/finance/dashboard")]
+        public async Task<ActionResult<Response<OrganizerFinanceDashboardDto>>> GetFinanceDashboard()
+        {
+            var dashboard = await _matchService.GetFinanceDashboardAsync(GetCurrentUserId());
+            return Ok(new Response<OrganizerFinanceDashboardDto> { Status = 200, Message = "Dashboard retrieved successfully.", Data = dashboard });
+        }
+
+        [HttpPost("organizer/finance/withdraw")]
+        public async Task<ActionResult<Response<object>>> WithdrawOrganizerFunds([FromBody] OrganizerWithdrawRequestDto dto)
+        {
+            var (success, message) = await _matchService.WithdrawOrganizerFundsAsync(GetCurrentUserId(), dto.Amount);
+            if (!success) return BadRequest(new Response<object> { Status = 400, Message = message });
+            return Ok(new Response<object> { Status = 200, Message = message });
         }
 
         [HttpPost("gamesessions/{sessionId}/checkin")]

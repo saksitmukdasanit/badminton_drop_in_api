@@ -49,6 +49,16 @@ namespace DropInBadAPI.Services
             decimal totalIncome = allBills.Sum(b => b.TotalAmount) 
                 - allBills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
 
+            // --- NEW: หายอดเงินในกระเป๋า (Wallet) และยอดที่รอเก็บเงิน (Pending) ---
+            decimal walletBalance = await _context.UserWallets
+                .Where(w => w.UserId == userId)
+                .Select(w => w.Balance)
+                .FirstOrDefaultAsync();
+
+            decimal pendingIncome = await _context.ParticipantBills
+                .Where(b => b.Session.CreatedByUserId == userId && b.Status == 1) // 1 = ค้างชำระ
+                .SumAsync(b => b.TotalAmount);
+
             // 4. จำนวนผู้ติดตาม
             int followersCount = await _context.UserFollows
                 .CountAsync(f => f.OrganizerId == userId);
@@ -105,7 +115,15 @@ namespace DropInBadAPI.Services
             return new OrganizerDashboardDto
             {
                 Profile = new OrganizerDashboardProfileDto { Nickname = profile.Nickname, ProfilePhotoUrl = profile.ProfilePhotoUrl, Status = (byte)organizerProfile.Status },
-                Stats = new OrganizerDashboardStatsDto { TotalSessionsHosted = totalSessionsHosted, TotalPlayersJoined = totalPlayersJoined + totalWalkinsJoined, TotalNetIncome = totalIncome < 0 ? 0 : totalIncome, FollowersCount = followersCount },
+                Stats = new OrganizerDashboardStatsDto 
+                { 
+                    TotalSessionsHosted = totalSessionsHosted, 
+                    TotalPlayersJoined = totalPlayersJoined + totalWalkinsJoined, 
+                    TotalNetIncome = totalIncome < 0 ? 0 : totalIncome, 
+                    WalletBalance = walletBalance,
+                    TotalPendingIncome = pendingIncome,
+                    FollowersCount = followersCount 
+                },
                 NextUpcomingSession = nextSessionDto
             };
         }

@@ -124,7 +124,7 @@ namespace DropInBadAPI.Repositories
             var userProfile = await _context.UserProfiles.FirstOrDefaultAsync(p => p.UserId == user.UserId);
             if (userProfile != null && !userProfile.IsPhoneNumberVerified)
             {
-                return (null, null, "Phone number not verified. Please verify OTP.");
+                return (null, null, "เบอร์โทรศัพท์นี้ยังไม่ผ่านการยืนยัน OTP กรุณากดสมัครสมาชิกใหม่อีกครั้ง (ข้อมูลเดิมที่ค้างอยู่จะถูกล้างอัตโนมัติ)");
             }
 
             // สร้าง Token ทั้ง 2 ตัว

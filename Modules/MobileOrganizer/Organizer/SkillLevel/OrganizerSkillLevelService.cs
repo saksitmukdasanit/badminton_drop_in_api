@@ -13,11 +13,29 @@ namespace DropInBadAPI.Service.Mobile.Organizer
 
         public async Task<IEnumerable<SkillLevelDto>> GetLevelsByOrganizerAsync(int organizerUserId)
         {
-            return await _context.OrganizerSkillLevels
+            var levels = await _context.OrganizerSkillLevels
                 .Where(sl => sl.OrganizerUserId == organizerUserId && sl.IsActive == true)
                 .OrderBy(sl => sl.LevelRank)
                 .Select(sl => new SkillLevelDto(sl.SkillLevelId, sl.LevelRank, sl.LevelName, sl.ColorHexCode))
                 .ToListAsync();
+
+            // --- NEW: ถ้ายังไม่มีระดับมือเลย (เช่น เพิ่งสมัครเป็นผู้จัดใหม่) ให้สร้างค่าเริ่มต้นให้ 4 ระดับ ---
+            if (!levels.Any())
+            {
+                var defaultLevels = new List<OrganizerSkillLevel>
+                {
+                    new OrganizerSkillLevel { OrganizerUserId = organizerUserId, LevelRank = 1, LevelName = "มือใหม่", ColorHexCode = "#4CAF50", IsActive = true, CreatedDate = DateTime.UtcNow },
+                    new OrganizerSkillLevel { OrganizerUserId = organizerUserId, LevelRank = 2, LevelName = "มือเบา", ColorHexCode = "#2196F3", IsActive = true, CreatedDate = DateTime.UtcNow },
+                    new OrganizerSkillLevel { OrganizerUserId = organizerUserId, LevelRank = 3, LevelName = "มือกลาง", ColorHexCode = "#FF9800", IsActive = true, CreatedDate = DateTime.UtcNow },
+                    new OrganizerSkillLevel { OrganizerUserId = organizerUserId, LevelRank = 4, LevelName = "มือหนัก", ColorHexCode = "#F44336", IsActive = true, CreatedDate = DateTime.UtcNow }
+                };
+                await _context.OrganizerSkillLevels.AddRangeAsync(defaultLevels);
+                await _context.SaveChangesAsync();
+
+                return defaultLevels.Select(sl => new SkillLevelDto(sl.SkillLevelId, sl.LevelRank, sl.LevelName, sl.ColorHexCode)).ToList();
+            }
+
+            return levels;
         }
 
         public async Task<SkillLevelDto?> GetLevelByIdAsync(int skillLevelId, int organizerUserId)

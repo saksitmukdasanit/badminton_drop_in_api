@@ -5,6 +5,7 @@ using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
+using FirebaseAdmin.Messaging;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -67,16 +68,56 @@ namespace DropInBadAPI.Services
 
         public async Task SendNotificationAsync(int userId, string title, string message, string type, int? referenceId = null)
         {
-            var notification = new Notification
+            var notification = new DropInBadAPI.Models.Notification
             {
                 UserId = userId, Title = title, Message = message, Type = type, ReferenceId = referenceId, IsRead = false, CreatedDate = DateTime.UtcNow
             };
             _context.Notifications.Add(notification);
             await _context.SaveChangesAsync();
 
-            // TODO: สร้าง Service สำหรับยิง Push Notification (เช่น Firebase Cloud Messaging - FCM) 
-            // ดึง DeviceToken (FCM Token) ของ userId จาก Database
-            // await _fcmService.SendPushNotificationAsync(deviceToken, title, message);
+            // ดึง FCM Token ของ User จากตาราง UserLogins (ใช้ ProviderName = "FCM")
+            var fcmLogin = await _context.UserLogins
+                .FirstOrDefaultAsync(ul => ul.UserId == userId && ul.ProviderName == "FCM");
+
+            if (fcmLogin != null && !string.IsNullOrEmpty(fcmLogin.ProviderKey))
+            {
+                try
+                {
+                    var msg = new FirebaseAdmin.Messaging.Message()
+                    {
+                        Token = fcmLogin.ProviderKey,
+                        Notification = new FirebaseAdmin.Messaging.Notification
+                        {
+                            Title = title,
+                            Body = message
+                        },
+                        Data = new Dictionary<string, string>
+                        {
+                            { "type", type },
+                            { "referenceId", referenceId?.ToString() ?? "" }
+                        }
+                    };
+                    await FirebaseMessaging.DefaultInstance.SendAsync(msg);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Firebase FCM Error: {ex.Message}");
+                }
+            }
+        }
+
+        public async Task UpdateFcmTokenAsync(int userId, string token)
+        {
+            var fcmLogin = await _context.UserLogins.FirstOrDefaultAsync(ul => ul.UserId == userId && ul.ProviderName == "FCM");
+            if (fcmLogin == null)
+            {
+                _context.UserLogins.Add(new UserLogin { UserId = userId, ProviderName = "FCM", ProviderKey = token, PasswordHash = "" });
+            }
+            else
+            {
+                fcmLogin.ProviderKey = token;
+            }
+            await _context.SaveChangesAsync();
         }
     }
 }

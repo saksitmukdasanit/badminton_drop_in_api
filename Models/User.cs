@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 
 namespace DropInBadAPI.Models;
@@ -34,4 +34,6 @@ public partial class User
     public virtual ICollection<UserLogin> UserLogins { get; set; } = new List<UserLogin>();
 
     public virtual UserProfile? UserProfile { get; set; }
+
+    public virtual UserWallet? UserWallet { get; set; }
 }

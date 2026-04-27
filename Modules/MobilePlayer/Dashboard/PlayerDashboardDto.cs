@@ -23,6 +23,9 @@ namespace DropInBadAPI.Dtos
         public decimal TotalSpent { get; init; }
         public int CancelCount { get; init; }
         public int FollowingCount { get; init; }
+        public int TotalWins { get; init; }
+        public decimal UnpaidBalance { get; init; }
+        public decimal WalletBalance { get; init; }
     }
 
     public record DashboardDto

@@ -52,5 +52,21 @@ namespace DropInBadAPI.Controllers.Mobile
 
             return Ok(new Response<object> { Status = 200, Message = message });
         }
+
+        [HttpGet("me/bank")]
+        public async Task<ActionResult<Response<PlayerBankDto>>> GetMyBankInfo()
+        {
+            var bankInfo = await _profileService.GetBankInfoAsync(GetCurrentUserId());
+            if (bankInfo == null) return NotFound(new Response<object> { Status = 404, Message = "User profile not found." });
+            return Ok(new Response<PlayerBankDto> { Status = 200, Message = "Success", Data = bankInfo });
+        }
+
+        [HttpPut("me/bank")]
+        public async Task<ActionResult<Response<PlayerBankDto>>> UpdateMyBankInfo([FromBody] UpdatePlayerBankDto dto)
+        {
+            var updatedBank = await _profileService.UpdateBankInfoAsync(GetCurrentUserId(), dto);
+            if (updatedBank == null) return NotFound(new Response<object> { Status = 404, Message = "User profile not found." });
+            return Ok(new Response<PlayerBankDto> { Status = 200, Message = "Bank info updated successfully.", Data = updatedBank });
+        }
     }
 }

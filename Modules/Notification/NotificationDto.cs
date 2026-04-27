@@ -12,4 +12,9 @@ namespace DropInBadAPI.Dtos
         public bool IsRead { get; init; }
         public DateTime CreatedDate { get; init; }
     }
+
+    public class UpdateFcmTokenDto
+    {
+        public string Token { get; set; } = string.Empty;
+    }
 }

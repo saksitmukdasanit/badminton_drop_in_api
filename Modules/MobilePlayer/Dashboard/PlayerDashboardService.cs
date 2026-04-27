@@ -45,8 +45,20 @@ namespace DropInBadAPI.Services
 
             int totalMatches = finishedMatches.Count;
             int totalMinutes = finishedMatches.Sum(mp => (int)(mp.Match.EndTime!.Value - mp.Match.StartTime!.Value).TotalMinutes);
+            
+            // --- NEW: หาสถิติเพิ่มเติม ---
+            int totalWins = finishedMatches.Count(mp => mp.Result == 1);
 
-            // 3. สถิติการใช้จ่าย (เอาเฉพาะบิลที่จ่ายแล้ว)
+            decimal unpaidBalance = await _context.ParticipantBills
+                .Where(b => b.UserId == userId && b.Status == 1) // 1 = ค้างชำระ
+                .SumAsync(b => b.TotalAmount);
+
+            decimal walletBalance = await _context.UserWallets
+                .Where(w => w.UserId == userId)
+                .Select(w => w.Balance)
+                .FirstOrDefaultAsync();
+
+            // 3. สถิติการใช้จ่ายรวม (เอาเฉพาะบิลที่จ่ายแล้ว)
             decimal totalSpent = await _context.ParticipantBills
                 .Where(b => b.UserId == userId && b.Status == 2)
                 .SumAsync(b => b.TotalAmount);
@@ -118,7 +130,10 @@ namespace DropInBadAPI.Services
                     TotalPlayTimeMinutes = totalMinutes,
                     TotalSpent = totalSpent,
                     CancelCount = cancelCount,
-                    FollowingCount = followingCount
+                    FollowingCount = followingCount,
+                    TotalWins = totalWins,
+                    UnpaidBalance = unpaidBalance,
+                    WalletBalance = walletBalance
                 },
                 NextUpcomingSession = nextSessionDto
             };

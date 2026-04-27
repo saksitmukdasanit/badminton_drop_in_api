@@ -12,6 +12,8 @@ using DropInBadAPI.Service.Mobile.Profile;
 using DropInBadAPI.Hubs;
 using DropInBadAPI.Utilities; // เพิ่ม using สำหรับ Combinatorics
 using DropInBadAPI.Service.MobilePlayer.Game;
+using FirebaseAdmin;
+using Google.Apis.Auth.OAuth2;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -115,6 +117,9 @@ builder.Services.AddScoped<IFollowService, FollowService>(); // ลงทะเ�
 builder.Services.AddScoped<IPlayerDashboardService, PlayerDashboardService>(); // ลงทะเบียน Dashboard Service ของ Player
 builder.Services.AddScoped<IOrganizerDashboardService, OrganizerDashboardService>(); // ลงทะเบียน Dashboard Service ของ Organizer
 
+builder.Services.AddHttpClient<IXenditService, XenditService>();
+builder.Services.AddScoped<IWalletService, WalletService>(); // ลงทะเบียน Wallet Service
+
 
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -150,6 +155,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization();
 
+
+// --- Firebase Admin SDK Initialization ---
+// ตรวจสอบว่ามีไฟล์ Service Account Key ของ Firebase หรือไม่
+var firebaseConfigPath = Path.Combine(Directory.GetCurrentDirectory(), "firebase-adminsdk.json");
+if (File.Exists(firebaseConfigPath))
+{
+    FirebaseApp.Create(new AppOptions()
+    {
+        Credential = GoogleCredential.FromFile(firebaseConfigPath),
+    });
+    Console.WriteLine("Firebase Admin SDK Initialized.");
+}
+// -----------------------------------------
 
 var app = builder.Build();
 

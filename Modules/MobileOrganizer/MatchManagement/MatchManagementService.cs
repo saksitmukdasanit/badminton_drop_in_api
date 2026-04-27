@@ -17,19 +17,22 @@ namespace DropInBadAPI.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly IConfiguration _configuration;
         private readonly INotificationService _notificationService;
+        private readonly IXenditService _xenditService;
 
         public MatchManagementService(
             BadmintonDbContext context,
             IHubContext<ManagementGameHub> hubContext,
             IServiceProvider serviceProvider,
             IConfiguration configuration,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            IXenditService xenditService)
         {
             _context = context;
             _hubContext = hubContext;
             _serviceProvider = serviceProvider;
             _configuration = configuration;
             _notificationService = notificationService;
+            _xenditService = xenditService;
         }
 
         public async Task<LiveSessionStateDto?> GetLiveStateAsync(int sessionId, int organizerUserId)
@@ -566,13 +569,24 @@ namespace DropInBadAPI.Services
         }
 
         // --- NEW: ฟังก์ชันบันทึกการจ่ายเงิน ---
-        public async Task<bool> PayBillAsync(int billId, int organizerUserId, PaymentRequestDto dto)
+        public async Task<(bool Success, string Message, string? QrCodeStr)> PayBillAsync(int billId, int organizerUserId, PaymentRequestDto dto)
         {
             var bill = await _context.ParticipantBills
-                .Include(b => b.Session)
+                .Include(b => b.Session).ThenInclude(s => s.CreatedByUser).ThenInclude(u => u.OrganizerProfile)
                 .FirstOrDefaultAsync(b => b.BillId == billId);
 
-            if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return false;
+            if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return (false, "Bill not found", null);
+
+            if (dto.PaymentMethod == "QR Code")
+            {
+                var subAccountId = bill.Session.CreatedByUser?.OrganizerProfile?.XenditAccountId;
+                string? qrCodeStr = await _xenditService.CreateQrCodeAsync($"BILL-{billId}", dto.Amount, subAccountId);
+                if (string.IsNullOrEmpty(qrCodeStr))
+                {
+                    return (false, "ไม่สามารถสร้าง QR Code จาก Xendit ได้", null);
+                }
+                return (true, "QR Code generated", qrCodeStr);
+            }
 
             // 1. อัปเดตสถานะบิลเป็นจ่ายแล้ว (Status = 2)
             bill.Status = 2;
@@ -606,7 +620,7 @@ namespace DropInBadAPI.Services
                 );
             }
 
-            return true;
+            return (true, "Payment recorded successfully", null);
         }
 
         // --- NEW: ฟังก์ชันยกเลิกบิล (เพื่อไม่ให้ยอดทบกันเมื่อจ่ายใหม่) ---
@@ -691,6 +705,91 @@ namespace DropInBadAPI.Services
             }
 
             return (false, "Invalid check-in data provided.");
+        }
+
+        public async Task<OrganizerFinanceDashboardDto> GetFinanceDashboardAsync(int organizerUserId)
+        {
+            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == organizerUserId);
+            decimal balance = wallet?.Balance ?? 0;
+
+            var profile = await _context.OrganizerProfiles.Include(p => p.Bank).FirstOrDefaultAsync(p => p.UserId == organizerUserId);
+
+            var sessions = await _context.GameSessions
+                .Where(s => s.CreatedByUserId == organizerUserId && s.Status != 3) // ไม่รวมก๊วนยกเลิก
+                .Include(s => s.ParticipantBills)
+                .Include(s => s.SessionParticipants)
+                .ToListAsync();
+
+            decimal totalIncome = sessions.SelectMany(s => s.ParticipantBills).Where(b => b.Status == 2).Sum(b => b.TotalAmount);
+            decimal pendingAmount = sessions.SelectMany(s => s.ParticipantBills).Where(b => b.Status == 1).Sum(b => b.TotalAmount);
+
+            var latestSessions = sessions.OrderByDescending(s => s.SessionDate).ThenByDescending(s => s.StartTime).Take(5).ToList();
+            var chartData = latestSessions.Select(s => new FinanceChartGameDto
+            {
+                Name = s.GroupName,
+                PlayersCount = s.SessionParticipants.Count(p => p.Status == 1),
+                PaidCount = s.ParticipantBills.Count(b => b.SessionId == s.SessionId && b.Status == 2)
+            }).Reverse().ToList();
+
+            decimal chartTotalIncome = latestSessions.SelectMany(s => s.ParticipantBills).Where(b => b.Status == 2).Sum(b => b.TotalAmount);
+
+            return new OrganizerFinanceDashboardDto
+            {
+                Balance = balance,
+                TotalIncome = totalIncome,
+                PendingAmount = pendingAmount,
+                ChartTotalIncome = chartTotalIncome,
+                LatestGames = chartData,
+                BankName = profile?.Bank?.BankName,
+                BankAccountNumber = profile?.BankAccountNumber,
+                BankAccountPhotoUrl = profile?.BankAccountPhotoUrl,
+                NationalId = profile?.NationalId
+            };
+        }
+
+        public async Task<(bool Success, string Message)> WithdrawOrganizerFundsAsync(int organizerUserId, decimal amount)
+        {
+            if (amount <= 0) return (false, "จำนวนเงินต้องมากกว่า 0 บาท");
+
+            var profile = await _context.OrganizerProfiles.Include(p => p.Bank).Include(p => p.User).ThenInclude(u => u.UserProfile).FirstOrDefaultAsync(p => p.UserId == organizerUserId);
+            if (profile == null || profile.BankId == null || string.IsNullOrEmpty(profile.BankAccountNumber))
+            {
+                return (false, "กรุณาตั้งค่าบัญชีรับเงินของผู้จัดในหน้าโปรไฟล์ให้เรียบร้อยก่อนทำรายการ");
+            }
+
+            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == organizerUserId);
+            if (wallet == null || wallet.Balance < amount) return (false, "ยอดเงินคงเหลือในระบบไม่เพียงพอ");
+
+            // --- NEW: ยิง API สั่งให้ Xendit โอนเงินเข้าบัญชี (Payout) ---
+            string bankCode = profile.Bank?.BankCode ?? "";
+            if (string.IsNullOrEmpty(bankCode)) return (false, "ไม่พบรหัสธนาคารในระบบ ไม่สามารถทำรายการโอนได้");
+
+            string accountName = profile.User?.UserProfile?.FirstName + " " + profile.User?.UserProfile?.LastName;
+            if (string.IsNullOrWhiteSpace(accountName)) accountName = profile.User?.UserProfile?.Nickname ?? "DropInBad User";
+
+            string refId = $"ORG-{organizerUserId}-{DateTime.UtcNow.Ticks}";
+            var (payoutSuccess, payoutMessage, payoutId) = await _xenditService.CreatePayoutAsync(
+                refId, amount, bankCode, accountName, profile.BankAccountNumber, $"ถอนเงินรายได้ผู้จัด: {profile.User?.UserProfile?.Nickname}", profile.XenditAccountId
+            );
+
+            if (!payoutSuccess) return (false, $"การโอนเงินขัดข้อง: {payoutMessage}");
+
+            wallet.Balance -= amount;
+            wallet.UpdatedDate = DateTime.UtcNow;
+
+            var transaction = new WalletTransaction
+            {
+                Wallet = wallet,
+                Amount = amount,
+                TransactionType = 2, // 2 = OUT (Withdraw)
+                Description = $"ถอนเงินรายได้ผู้จัดเข้าบัญชี {profile.Bank?.BankName} ({profile.BankAccountNumber}) [Ref: {payoutId}]",
+                CreatedDate = DateTime.UtcNow
+            };
+
+            await _context.WalletTransactions.AddAsync(transaction);
+            await _context.SaveChangesAsync();
+
+            return (true, "ทำรายการถอนเงินและโอนเงินเข้าบัญชีสำเร็จ ระบบจะส่งยอดเข้าบัญชีของคุณเร็วๆ นี้");
         }
 
         // ฟังก์ชันค้นหาประวัติแขกเดิม (Autocomplete)
@@ -1324,6 +1423,49 @@ namespace DropInBadAPI.Services
             await BroadcastLiveStateChange(match.SessionId, organizerUserId);
 
             return matchDto;
+        }
+
+        public async Task<bool> ProcessQrPaymentWebhookAsync(string referenceId, decimal amount)
+        {
+            // 1. แกะรหัส BillId ออกจาก referenceId เช่น "BILL-123"
+            if (!referenceId.StartsWith("BILL-")) return false;
+            if (!int.TryParse(referenceId.Substring(5), out int billId)) return false;
+
+            var bill = await _context.ParticipantBills
+                .Include(b => b.Session)
+                .FirstOrDefaultAsync(b => b.BillId == billId);
+
+            // ถ้าไม่มีบิล หรือจ่ายแล้ว ไม่ต้องทำอะไรซ้ำซ้อน
+            if (bill == null || bill.Status == 2) return true; 
+
+            bill.Status = 2; // อัปเดตสถานะบิลเป็น 2 (จ่ายแล้ว)
+
+            var payment = new Payment
+            {
+                BillId = billId,
+                PaymentMethod = 2, // 2 = QR Code
+                Amount = amount,
+                PaymentDate = DateTime.UtcNow,
+                ReceivedByUserId = bill.Session.CreatedByUserId // ผู้รับเงินคือเจ้าของก๊วน
+            };
+
+            await _context.Payments.AddAsync(payment);
+            await _context.SaveChangesAsync();
+
+            // 2. ส่ง SignalR กลับไปหาผู้เล่น ให้แอปปิดหน้าต่าง QR Code ทันที
+            if (bill.UserId.HasValue)
+            {
+                // เปลี่ยนจากการยิงเข้า Group เป็นการยิงหา User คนนั้นโดยตรงผ่าน Connection ของเขา
+                await _hubContext.Clients.User(bill.UserId.Value.ToString()).SendAsync("QrPaymentSuccess", bill.BillId);
+                await _notificationService.SendNotificationAsync(bill.UserId.Value, "ชำระเงินสำเร็จ", $"ระบบได้รับยอดชำระเงิน {amount:N2} บาท ผ่าน QR Code เรียบร้อยแล้ว", "PAYMENT_SUCCESS", bill.SessionId);
+            }
+            
+            // ส่งเข้า Group ด้วย เผื่อกรณีผู้จัดเปิด QR Code เองให้ Walk-in สแกน หน้าจอผู้จัดจะได้ปิดอัตโนมัติเช่นกัน
+            await _hubContext.Clients.Group($"session-{bill.SessionId}").SendAsync("QrPaymentSuccess", bill.BillId);
+
+            // 3. ส่ง SignalR อัปเดตกระดาน (Live State) ฝั่งผู้จัด เพื่อให้เห็นว่ายอดเงินเข้าแล้ว
+            await BroadcastLiveStateChange(bill.SessionId, bill.Session.CreatedByUserId);
+            return true;
         }
 
         private async Task BroadcastLiveStateChange(int sessionId, int organizerUserId)

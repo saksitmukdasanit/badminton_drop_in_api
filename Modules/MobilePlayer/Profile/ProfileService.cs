@@ -80,5 +80,31 @@ namespace DropInBadAPI.Service.Mobile.Profile
 
             return (true, "Phone number updated successfully.");
         }
+
+        public async Task<PlayerBankDto?> GetBankInfoAsync(int userId)
+        {
+            var profile = await _context.UserProfiles.FindAsync(userId);
+            if (profile == null) return null;
+            return new PlayerBankDto(profile.BankId, profile.BankAccountNumber, profile.BankAccountName, profile.BankAccountPhotoUrl);
+        }
+
+        public async Task<PlayerBankDto?> UpdateBankInfoAsync(int userId, UpdatePlayerBankDto dto)
+        {
+            var profile = await _context.UserProfiles.FindAsync(userId);
+            if (profile == null) return null;
+
+            profile.BankId = dto.BankId;
+            profile.BankAccountNumber = dto.BankAccountNumber;
+            profile.BankAccountName = dto.BankAccountName;
+            if (!string.IsNullOrEmpty(dto.BankAccountPhotoUrl))
+            {
+                profile.BankAccountPhotoUrl = dto.BankAccountPhotoUrl;
+            }
+            profile.UpdatedDate = DateTime.UtcNow;
+            profile.UpdatedBy = userId;
+
+            await _context.SaveChangesAsync();
+            return new PlayerBankDto(profile.BankId, profile.BankAccountNumber, profile.BankAccountName, profile.BankAccountPhotoUrl);
+        }
     }
 }

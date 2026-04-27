@@ -51,5 +51,12 @@ namespace DropInBadAPI.Controllers.Mobile
             await _notificationService.MarkAllAsReadAsync(GetCurrentUserId());
             return Ok(new Response<object> { Status = 200, Message = "All notifications marked as read." });
         }
+
+        [HttpPost("fcm-token")]
+        public async Task<ActionResult<Response<object>>> UpdateFcmToken([FromBody] UpdateFcmTokenDto dto)
+        {
+            await _notificationService.UpdateFcmTokenAsync(GetCurrentUserId(), dto.Token);
+            return Ok(new Response<object> { Status = 200, Message = "FCM Token updated successfully." });
+        }
     }
 }

@@ -68,6 +68,10 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<Venue> Venues { get; set; }
 
+    public virtual DbSet<UserWallet> UserWallets { get; set; }
+
+    public virtual DbSet<WalletTransaction> WalletTransactions { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bank>(entity =>
@@ -275,6 +279,9 @@ public partial class BadmintonDbContext : DbContext
                 .HasColumnName("ProfilePhotoURL");
             entity.Property(e => e.PublicPhoneNumber).HasMaxLength(20);
             entity.Property(e => e.Status).HasDefaultValue((short)0);
+            entity.Property(e => e.XenditAccountId)
+                .HasMaxLength(100)
+                .HasColumnName("XenditAccountID");
 
             entity.HasOne(d => d.Bank).WithMany(p => p.OrganizerProfiles)
                 .HasForeignKey(d => d.BankId)
@@ -523,6 +530,13 @@ public partial class BadmintonDbContext : DbContext
                 .HasMaxLength(500)
                 .HasColumnName("ProfilePhotoURL");
 
+            entity.Property(e => e.BankId).HasColumnName("BankID");
+            entity.Property(e => e.BankAccountNumber).HasMaxLength(50);
+            entity.Property(e => e.BankAccountName).HasMaxLength(150);
+            entity.Property(e => e.BankAccountPhotoUrl)
+                .HasMaxLength(500)
+                .HasColumnName("BankAccountPhotoURL");
+
             entity.HasOne(d => d.User).WithOne(p => p.UserProfile)
                 .HasForeignKey<UserProfile>(d => d.UserId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
@@ -598,6 +612,40 @@ public partial class BadmintonDbContext : DbContext
                 .HasForeignKey(d => d.OrganizerId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_UserFollows_Organizer");
+        });
+
+        modelBuilder.Entity<UserWallet>(entity =>
+        {
+            entity.HasKey(e => e.WalletId).HasName("UserWallets_pkey");
+            entity.HasIndex(e => e.UserId, "UserWallets_UserID_key").IsUnique();
+
+            entity.Property(e => e.WalletId).HasColumnName("WalletID");
+            entity.Property(e => e.UserId).HasColumnName("UserID");
+            entity.Property(e => e.Balance).HasPrecision(10, 2).HasDefaultValue(0m);
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.User).WithOne(p => p.UserWallet)
+                .HasForeignKey<UserWallet>(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserWallets_UserID");
+        });
+
+        modelBuilder.Entity<WalletTransaction>(entity =>
+        {
+            entity.HasKey(e => e.TransactionId).HasName("WalletTransactions_pkey");
+            entity.HasIndex(e => e.WalletId, "IX_WalletTransactions_WalletID");
+
+            entity.Property(e => e.TransactionId).HasColumnName("TransactionID");
+            entity.Property(e => e.WalletId).HasColumnName("WalletID");
+            entity.Property(e => e.Amount).HasPrecision(10, 2);
+            entity.Property(e => e.Description).HasMaxLength(255);
+            entity.Property(e => e.ReferenceId).HasColumnName("ReferenceID");
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Wallet).WithMany(p => p.WalletTransactions)
+                .HasForeignKey(d => d.WalletId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_WalletTransactions_WalletID");
         });
 
         OnModelCreatingPartial(modelBuilder);

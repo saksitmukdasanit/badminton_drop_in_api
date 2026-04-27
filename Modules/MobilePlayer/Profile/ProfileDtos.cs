@@ -13,4 +13,17 @@ namespace DropInBadAPI.Dtos
 
     public record UpdatePhoneNumberDto(string NewPhoneNumber);
 
+    public record PlayerBankDto(
+        int? BankId,
+        string? BankAccountNumber,
+        string? BankAccountName,
+        string? BankAccountPhotoUrl
+    );
+
+    public record UpdatePlayerBankDto(
+        int? BankId,
+        string? BankAccountNumber,
+        string? BankAccountName,
+        string? BankAccountPhotoUrl
+    );
 }

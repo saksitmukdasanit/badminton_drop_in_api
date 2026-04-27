@@ -17,19 +17,22 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         private readonly IHubContext<ManagementGameHub> _hubContext;
         private readonly IMatchManagementService _matchManagementService;
         private readonly INotificationService _notificationService;
+        private readonly IXenditService _xenditService;
 
         public PlayerGameSessionService(
             BadmintonDbContext context, 
             IConfiguration configuration,
             IHubContext<ManagementGameHub> hubContext,
             IMatchManagementService matchManagementService,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            IXenditService xenditService)
         {
             _context = context;
             _configuration = configuration;
             _hubContext = hubContext;
             _matchManagementService = matchManagementService;
             _notificationService = notificationService;
+            _xenditService = xenditService;
         }
 
         public async Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int? organizerId = null, List<DayOfWeek>? daysOfWeek = null, List<int>? gameTypeIds = null, int page = 1, int limit = 10)
@@ -683,7 +686,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     if (payment != null)
                     {
                         result.Payment.PaymentDate = payment.PaymentDate.AddHours(7).ToString("dd/MM/yy HH:mm น.");
-                        result.Payment.PaymentMethod = payment.PaymentMethod == 1 ? "Cash" : "QR Code";
+                        result.Payment.PaymentMethod = payment.PaymentMethod == 1 ? "Cash" : (payment.PaymentMethod == 2 ? "QR Code" : "Wallet");
                     }
                 }
             }
@@ -748,6 +751,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     var session = await _context.GameSessions
                         .Include(s => s.SessionParticipants)
                         .Include(s => s.SessionWalkinGuests)
+                        // --- NEW: Include OrganizerProfile เพื่อดึง XenditAccountId ---
+                        .Include(s => s.CreatedByUser).ThenInclude(u => u.OrganizerProfile)
                         .FirstOrDefaultAsync(s => s.SessionId == sessionId);
 
                     if (session == null) return (null, "Session not found.");
@@ -786,6 +791,9 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     decimal courtFee = session.CourtFeePerPerson ?? 0;
                     decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
                     decimal totalAmount = courtFee + serviceFee;
+                    
+                    string? qrCodeStr = null;
+                    int? generatedBillId = null;
 
                     if (totalAmount > 0)
                     {
@@ -795,20 +803,50 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                             UserId = userId,
                             CreatedDate = DateTime.UtcNow,
                             TotalAmount = totalAmount,
-                            Status = 2, // Mark as Paid immediately
+                            Status = (byte)(dto.PaymentMethod == "QR Code" ? 1 : 2), // Mark as Paid immediately unless QR
                             BillLineItems = new List<BillLineItem>()
                         };
                         if (courtFee > 0) newBill.BillLineItems.Add(new BillLineItem { Description = "ค่าสนาม", Amount = courtFee });
                         if (serviceFee > 0) newBill.BillLineItems.Add(new BillLineItem { Description = "ค่าธรรมเนียม", Amount = serviceFee });
 
-                        var newPayment = new Payment
+                        if (dto.PaymentMethod == "Wallet")
                         {
-                            PaymentMethod = dto.PaymentMethod == "Credit/Debit Card" ? (byte)1 : (byte)2, // Assuming 1=Card, 2=Other digital
-                            Amount = totalAmount,
-                            PaymentDate = DateTime.UtcNow,
-                        };
-                        newBill.Payments.Add(newPayment);
+                            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
+                            if (wallet == null || wallet.Balance < totalAmount)
+                            {
+                                throw new Exception("ยอดเงินในกระเป๋าไม่เพียงพอ กรุณาเติมเงินหรือเลือกช่องทางอื่น");
+                            }
+                            wallet.Balance -= totalAmount;
+                            wallet.UpdatedDate = DateTime.UtcNow;
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = wallet, Amount = totalAmount, TransactionType = 2, Description = $"ชำระค่าเข้าร่วมก๊วน: {session.GroupName}", ReferenceId = sessionId });
+                            newBill.Payments.Add(new Payment { PaymentMethod = 3, Amount = totalAmount, PaymentDate = DateTime.UtcNow });
+
+                            // --- NEW: เพิ่มยอดเงินเข้า Wallet ผู้จัดอัตโนมัติ ---
+                            var organizerWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == session.CreatedByUserId);
+                            if (organizerWallet == null)
+                            {
+                                organizerWallet = new UserWallet { UserId = session.CreatedByUserId, Balance = 0 };
+                                await _context.UserWallets.AddAsync(organizerWallet);
+                            }
+                            organizerWallet.Balance += courtFee; // FIX: โอนให้ผู้จัดเฉพาะค่าสนาม ไม่รวม Service Fee
+                            organizerWallet.UpdatedDate = DateTime.UtcNow;
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = organizerWallet, Amount = courtFee, TransactionType = 1, Description = $"รายรับค่าก๊วน (Join): {session.GroupName}", ReferenceId = session.SessionId });
+                        }
+                        else
+                        {
+                            newBill.Payments.Add(new Payment { PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1, Amount = totalAmount, PaymentDate = DateTime.UtcNow });
+                        }
                         _context.ParticipantBills.Add(newBill);
+                        
+                        // --- NEW: บันทึกบิลก่อนเพื่อเอา BillId ไปสร้าง QR Code ---
+                        await _context.SaveChangesAsync();
+                        generatedBillId = newBill.BillId;
+
+                        if (dto.PaymentMethod == "QR Code")
+                        {
+                            var subAccountId = session.CreatedByUser?.OrganizerProfile?.XenditAccountId;
+                            qrCodeStr = await _xenditService.CreateQrCodeAsync($"BILL-{newBill.BillId}", totalAmount, subAccountId);
+                        }
                     }
 
                     await _context.SaveChangesAsync();
@@ -822,12 +860,19 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                     await transaction.CommitAsync();
 
-                    return (new JoinSessionResponseDto { ParticipantId = participantEntry.ParticipantId, Status = newStatus, StatusMessage = statusMessage }, string.Empty);
+                    return (new JoinSessionResponseDto 
+                    { 
+                        ParticipantId = participantEntry.ParticipantId, 
+                        Status = newStatus, 
+                        StatusMessage = statusMessage,
+                        QrCode = qrCodeStr,
+                        BillId = generatedBillId
+                    }, string.Empty);
                 }
                 catch (Exception ex)
                 {
                     await transaction.RollbackAsync();
-                    return (null, $"An error occurred: {ex.Message}");
+                    return ((JoinSessionResponseDto?)null, $"An error occurred: {ex.Message}");
                 }
             });
         }
@@ -836,11 +881,72 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         {
             var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
             if (participant == null || participant.Status == 3) return (false, "Booking not found.");
+            
+            var session = await _context.GameSessions.FindAsync(sessionId);
+            
+            // --- NEW: ระบบคืนเงินเข้า Wallet อัตโนมัติ (กรณีผู้เล่นยกเลิกเอง คืนเต็มจำนวน) ---
+            if (session != null)
+            {
+                var paidBills = await _context.ParticipantBills
+                    .Include(b => b.BillLineItems)
+                    .Where(b => b.SessionId == sessionId && b.UserId == userId && b.Status == 2)
+                    .ToListAsync();
+
+                foreach (var bill in paidBills)
+                {
+                    // คืนเงินเต็มจำนวนที่จ่ายมา
+                    decimal refundAmount = bill.TotalAmount;
+
+                    if (refundAmount > 0)
+                    {
+                        var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
+                        if (wallet == null)
+                        {
+                            wallet = new UserWallet { UserId = userId, Balance = 0 };
+                            await _context.UserWallets.AddAsync(wallet);
+                        }
+
+                        wallet.Balance += refundAmount;
+                        wallet.UpdatedDate = DateTime.UtcNow;
+
+                        // --- FIX: ดึงเงินกลับจาก Wallet ผู้จัด (ยอมให้ติดลบได้) ---
+                        var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                        decimal serviceFee = serviceFeeItem?.Amount ?? 0;
+                        decimal amountToDeductFromOrg = refundAmount - serviceFee; // ดึงกลับเฉพาะส่วนที่ผู้จัดได้ไป
+
+                        if (amountToDeductFromOrg > 0)
+                        {
+                            var orgWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == session.CreatedByUserId);
+                            if (orgWallet == null)
+                            {
+                                orgWallet = new UserWallet { UserId = session.CreatedByUserId, Balance = 0 };
+                                await _context.UserWallets.AddAsync(orgWallet);
+                            }
+                            orgWallet.Balance -= amountToDeductFromOrg; // ยอมให้ติดลบได้
+                            orgWallet.UpdatedDate = DateTime.UtcNow;
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = orgWallet, Amount = amountToDeductFromOrg, TransactionType = 2, Description = $"หักเงินคืนผู้เล่น (ยกเลิก): {session.GroupName}", ReferenceId = sessionId });
+                        }
+                        // ----------------------------------------------------
+
+                        var transaction = new WalletTransaction
+                        {
+                            Wallet = wallet,
+                            Amount = refundAmount,
+                            TransactionType = 1, // 1 = IN (Refund)
+                            Description = $"คืนเงิน (ยกเลิกการจอง): {session.GroupName}",
+                            ReferenceId = sessionId,
+                        };
+                        await _context.WalletTransactions.AddAsync(transaction);
+                    }
+                    
+                    bill.Status = 3; // เปลี่ยนสถานะบิลเป็นยกเลิก
+                }
+            }
+
             participant.Status = 3;
             await _context.SaveChangesAsync();
 
             // --- แจ้งเตือนผู้จัด ---
-            var session = await _context.GameSessions.FindAsync(sessionId);
             var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
             if (session != null && user != null)
             {
@@ -1024,12 +1130,14 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             return (true, "Result submitted successfully.");
         }
 
-        public async Task<(bool Success, string ErrorMessage)> CheckoutAndPayAsync(int sessionId, int userId, PlayerPaymentRequestDto dto)
+        public async Task<(bool Success, string Message, string? QrCodeStr, int? BillId)> CheckoutAndPayAsync(int sessionId, int userId, PlayerPaymentRequestDto dto)
         {
-            var session = await _context.GameSessions.FindAsync(sessionId);
+            var session = await _context.GameSessions
+                .Include(s => s.CreatedByUser).ThenInclude(u => u.OrganizerProfile)
+                .FirstOrDefaultAsync(s => s.SessionId == sessionId);
             if (session == null)
             {
-                return (false, "Session not found.");
+                return (false, "Session not found.", null, null);
             }
 
             var participant = await _context.SessionParticipants
@@ -1037,7 +1145,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             if (participant == null)
             {
-                return (false, "You are not part of this session.");
+                return (false, "You are not part of this session.", null, null);
             }
 
             // --- NEW: ตรวจสอบว่ากำลังเล่นอยู่หรือไม่ ถ้าเล่นอยู่ห้าม Checkout ---
@@ -1046,7 +1154,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             if (isPlaying)
             {
-                return (false, "คุณกำลังแข่งขันอยู่ในสนาม ไม่สามารถชำระเงินเพื่อเช็คเอาท์ได้ในขณะนี้");
+                return (false, "คุณกำลังแข่งขันอยู่ในสนาม ไม่สามารถชำระเงินเพื่อเช็คเอาท์ได้ในขณะนี้", null, null);
             }
 
             var strategy = _context.Database.CreateExecutionStrategy();
@@ -1158,7 +1266,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         SessionId = sessionId,
                         UserId = userId,
                         TotalAmount = finalTotalAmount,
-                        Status = 2, // Paid
+                        Status = (byte)(dto.PaymentMethod == "QR Code" ? 1 : 2), // FIX: ถ้า QR ให้ค้างชำระไว้ก่อน
                         CreatedDate = DateTime.UtcNow,
                         BillLineItems = finalLineItems
                     };
@@ -1171,36 +1279,76 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         participant.CheckoutTime = DateTime.UtcNow;
                     }
 
-                    if (finalTotalAmount >= 0)
+                    if (finalTotalAmount > 0)
                     {
-                        var payment = new Payment
+                        if (dto.PaymentMethod == "Wallet")
                         {
-                            PaymentMethod = dto.PaymentMethod == "QR Code" ? (byte)2 : (byte)1,
-                            Amount = finalTotalAmount,
-                            PaymentDate = DateTime.UtcNow,
-                        };
-                        newBill.Payments.Add(payment);
+                            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
+                            if (wallet == null || wallet.Balance < finalTotalAmount)
+                            {
+                                throw new Exception("ยอดเงินในกระเป๋าไม่เพียงพอ กรุณาเติมเงินหรือเลือกช่องทางอื่น");
+                            }
+                            wallet.Balance -= finalTotalAmount;
+                            wallet.UpdatedDate = DateTime.UtcNow;
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = wallet, Amount = finalTotalAmount, TransactionType = 2, Description = $"ชำระค่าก๊วน: {session.GroupName}", ReferenceId = sessionId });
+                            newBill.Payments.Add(new Payment { PaymentMethod = 3, Amount = finalTotalAmount, PaymentDate = DateTime.UtcNow });
+
+                            // --- NEW: เพิ่มยอดเงินเข้า Wallet ผู้จัดอัตโนมัติ ---
+                            var organizerWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == session.CreatedByUserId);
+                            if (organizerWallet == null)
+                            {
+                                organizerWallet = new UserWallet { UserId = session.CreatedByUserId, Balance = 0 };
+                                await _context.UserWallets.AddAsync(organizerWallet);
+                            }
+                            
+                            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
+                            decimal amountForOrg = finalTotalAmount - serviceFee; // หัก Service Fee ออกก่อนเข้าเป๋าผู้จัด
+                            organizerWallet.Balance += amountForOrg;
+                            organizerWallet.UpdatedDate = DateTime.UtcNow;
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction { Wallet = organizerWallet, Amount = amountForOrg, TransactionType = 1, Description = $"รายรับค่าก๊วน (Checkout): {session.GroupName}", ReferenceId = session.SessionId });
+                        }
+                        else if (dto.PaymentMethod != "QR Code")
+                        {
+                            newBill.Payments.Add(new Payment { PaymentMethod = (byte)1, Amount = finalTotalAmount, PaymentDate = DateTime.UtcNow });
+                        }
                     }
 
                     await _context.SaveChangesAsync();
+
+                    string? qrCodeStr = null;
+                    if (finalTotalAmount > 0 && dto.PaymentMethod == "QR Code")
+                    {
+                        var subAccountId = session.CreatedByUser?.OrganizerProfile?.XenditAccountId;
+                        // ยิง Xendit สร้าง QR โดยส่งรหัสบิลอ้างอิงไป
+                        qrCodeStr = await _xenditService.CreateQrCodeAsync($"BILL-{newBill.BillId}", finalTotalAmount, subAccountId);
+                        if (string.IsNullOrEmpty(qrCodeStr))
+                        {
+                            throw new Exception("ไม่สามารถสร้าง QR Code จากระบบ Xendit ได้ โปรดลองใหม่อีกครั้ง");
+                        }
+                    }
+
                     await transaction.CommitAsync();
 
                     var liveState = await _matchManagementService.GetLiveStateAsync(sessionId, session.CreatedByUserId);
                     await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("ReceiveLiveStateUpdate", liveState);
 
                     // --- แจ้งเตือนผู้จัด (ถ้ามียอดชำระ) ---
-                    if (finalTotalAmount > 0)
+                    if (finalTotalAmount > 0 && dto.PaymentMethod != "QR Code")
                     {
                         var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
                         await _notificationService.SendNotificationAsync(session.CreatedByUserId, "ได้รับชำระเงิน", $"{user?.UserProfile?.Nickname ?? "ผู้เล่น"} ได้ชำระเงินจำนวน {finalTotalAmount:N2} บาท", "PAYMENT_RECEIVED", sessionId);
                     }
 
-                    return (true, "Payment successful and checked out.");
+                    if (dto.PaymentMethod == "QR Code" && finalTotalAmount > 0)
+                    {
+                        return (true, "QR Code generated.", qrCodeStr, (int?)newBill.BillId);
+                    }
+                    return (true, "Payment successful and checked out.", (string?)null, (int?)newBill.BillId);
                 }
                 catch (Exception ex)
                 {
                     await transaction.RollbackAsync();
-                    return (false, $"An error occurred: {ex.Message}");
+                    return (false, $"An error occurred: {ex.Message}", (string?)null, (int?)null);
                 }
             });
         }

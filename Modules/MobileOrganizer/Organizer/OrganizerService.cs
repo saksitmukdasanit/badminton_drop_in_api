@@ -2,16 +2,19 @@ using DropInBadAPI.Data;
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
+using DropInBadAPI.Interfaces; // นำเข้า Interface ของ Xendit
 
 namespace DropInBadAPI.Service.Mobile.Organizer
 {
     public class OrganizerService : IOrganizerService
     {
         private readonly BadmintonDbContext _context;
+        private readonly IXenditService _xenditService;
 
-        public OrganizerService(BadmintonDbContext context)
+        public OrganizerService(BadmintonDbContext context, IXenditService xenditService)
         {
             _context = context;
+            _xenditService = xenditService;
         }
 
         public async Task<OrganizerProfileDto?> GetOrganizerProfileAsync(int userId)
@@ -99,6 +102,14 @@ namespace DropInBadAPI.Service.Mobile.Organizer
                 return (null, "คุณได้สมัครเป็นผู้จัดไปแล้ว");
             }
 
+            // 1. ดึงข้อมูลอีเมลและชื่อของผู้จัด เพื่อใช้สมัครบัญชี Xendit
+            var user = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == userId);
+            string email = user?.UserProfile?.PrimaryContactEmail ?? $"organizer_{userId}@dropinbad.com";
+            string bizName = user?.UserProfile?.Nickname ?? $"Organizer {userId}";
+
+            // 2. สั่งสร้าง Sub-account ไปที่ Xendit
+            string? xenditAccountId = await _xenditService.CreateSubAccountAsync(email, bizName);
+
             var newOrg = new OrganizerProfile
             {
                 UserId = userId,
@@ -111,7 +122,8 @@ namespace DropInBadAPI.Service.Mobile.Organizer
                 LineId = dto.LineId,
                 Status = 1, // ให้สิทธิ์เป็น 1 (Approved) ใช้งานได้เลยทันที (ปรับเป็น 0 Pending ได้ถ้ามีระบบ Admin อนุมัติ)
                 CreatedDate = DateTime.UtcNow,
-                CreatedBy = userId
+                CreatedBy = userId,
+                XenditAccountId = xenditAccountId
             };
 
             await _context.OrganizerProfiles.AddAsync(newOrg);

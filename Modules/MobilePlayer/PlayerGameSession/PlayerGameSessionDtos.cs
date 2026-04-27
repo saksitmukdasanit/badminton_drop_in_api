@@ -71,79 +71,81 @@ namespace DropInBadAPI.Dtos
         public int ParticipantId { get; init; }
         public int Status { get; init; } // 1=เข้าร่วม, 2=รอคิว
         public string StatusMessage { get; init; } = string.Empty; // "เข้าร่วมสำเร็จ" หรือ "คุณอยู่ในคิวสำรอง"
+        public string? QrCode { get; set; }
+        public int? BillId { get; set; }
     }
 
     public record FacilityDto(int FacilityId, string FacilityName, string IconUrl);
 
-        // --- NEW: DTO สำหรับหน้า History Detail ---
-        public class PlayerHistoryDetailDto
-        {
-            public HistorySummaryDto Summary { get; set; } = new();
-            public HistoryPaymentDto Payment { get; set; } = new();
-            public string UserStatus { get; set; } = string.Empty;
-            public List<HistoryMatchDto> Matches { get; set; } = new();
-        }
+    // --- NEW: DTO สำหรับหน้า History Detail ---
+    public class PlayerHistoryDetailDto
+    {
+        public HistorySummaryDto Summary { get; set; } = new();
+        public HistoryPaymentDto Payment { get; set; } = new();
+        public string UserStatus { get; set; } = string.Empty;
+        public List<HistoryMatchDto> Matches { get; set; } = new();
+    }
 
-        public class HistorySummaryDto
-        {
-            public int TotalGames { get; set; }
-            public int TotalShuttlecocks { get; set; }
-            public int TotalPlayTime { get; set; }
-            public int TotalWaitTime { get; set; }
-        }
+    public class HistorySummaryDto
+    {
+        public int TotalGames { get; set; }
+        public int TotalShuttlecocks { get; set; }
+        public int TotalPlayTime { get; set; }
+        public int TotalWaitTime { get; set; }
+    }
 
-        public class HistoryPaymentDto
-        {
-            public string Status { get; set; } = string.Empty;
-            public decimal TotalAmount { get; set; }
-            public string? PaymentDate { get; set; }
-            public string? PaymentMethod { get; set; }
-            public List<CustomLineItemDto> LineItems { get; set; } = new();
-        }
+    public class HistoryPaymentDto
+    {
+        public string Status { get; set; } = string.Empty;
+        public decimal TotalAmount { get; set; }
+        public string? PaymentDate { get; set; }
+        public string? PaymentMethod { get; set; }
+        public List<CustomLineItemDto> LineItems { get; set; } = new();
+    }
 
-        public class HistoryMatchDto
-        {
-            public int MatchId { get; set; }
-            public int? Result { get; set; }
-            public string? Notes { get; set; }
-            public int DurationMinutes { get; set; }
-            public string? CourtNumber { get; set; }
-            public int ShuttlecocksUsed { get; set; }
-            public List<PlayerInMatchDto> MyTeam { get; set; } = new();
-            public List<PlayerInMatchDto> Opponents { get; set; } = new();
-        }
+    public class HistoryMatchDto
+    {
+        public int MatchId { get; set; }
+        public int? Result { get; set; }
+        public string? Notes { get; set; }
+        public int DurationMinutes { get; set; }
+        public string? CourtNumber { get; set; }
+        public int ShuttlecocksUsed { get; set; }
+        public List<PlayerInMatchDto> MyTeam { get; set; } = new();
+        public List<PlayerInMatchDto> Opponents { get; set; } = new();
+    }
 
-        public class PlayerCheckinRequestDto
-        {
-            public string ScannedQrCode { get; set; } = string.Empty;
-        }
+    public class PlayerCheckinRequestDto
+    {
+        public string ScannedQrCode { get; set; } = string.Empty;
+    }
 
-        // --- NEW: DTOs for GamePlayerPage ---
-        public class SubmitMatchResultDto
-        {
-            public int Result { get; set; } // 1=ชนะ, 2=แพ้, 3=เสมอ
-            public string? Notes { get; set; }
-        }
+    // --- NEW: DTOs for GamePlayerPage ---
+    public class SubmitMatchResultDto
+    {
+        public int Result { get; set; } // 1=ชนะ, 2=แพ้, 3=เสมอ
+        public string? Notes { get; set; }
+    }
 
-        public class PlayerBillPreviewDto
-        {
-            public List<BillLineItemDto> LineItems { get; set; } = new();
-        }
+    public class PlayerBillPreviewDto
+    {
+        public List<BillLineItemDto> LineItems { get; set; } = new();
+    }
 
-        public class PlayerStatsDto
-        {
-            public int TotalGamesPlayed { get; set; }
-            public string TotalMinutesPlayed { get; set; } = "0";
-            public int Wins { get; set; }
-            public int Losses { get; set; }
-            public List<PlayerMatchHistoryItemDto> MatchHistory { get; set; } = new();
-        }
+    public class PlayerStatsDto
+    {
+        public int TotalGamesPlayed { get; set; }
+        public string TotalMinutesPlayed { get; set; } = "0";
+        public int Wins { get; set; }
+        public int Losses { get; set; }
+        public List<PlayerMatchHistoryItemDto> MatchHistory { get; set; } = new();
+    }
 
-        public class PlayerMatchHistoryItemDto : HistoryMatchDto
-        {
-            // สืบทอดตัวเดิมมาใช้ซ้ำ แล้วเพิ่ม Teammate เข้าไป
-            public PlayerInMatchDto Teammate { get; set; } = new();
-        }
+    public class PlayerMatchHistoryItemDto : HistoryMatchDto
+    {
+        // สืบทอดตัวเดิมมาใช้ซ้ำ แล้วเพิ่ม Teammate เข้าไป
+        public PlayerInMatchDto Teammate { get; set; } = new();
+    }
 
     public class CustomLineItemDto
     {

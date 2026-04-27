@@ -163,7 +163,7 @@ namespace DropInBadAPI.Controllers.MobilePlayer
         [HttpPost("{id}/checkout-and-pay")]
         public async Task<ActionResult<Response<object>>> CheckoutAndPay(int id, [FromBody] PlayerPaymentRequestDto dto)
         {
-            var (success, errorMessage) = await _playerSessionService.CheckoutAndPayAsync(id, GetCurrentUserId(), dto);
+            var (success, errorMessage, qrCodeStr, billId) = await _playerSessionService.CheckoutAndPayAsync(id, GetCurrentUserId(), dto);
             
             if (!success)
             {
@@ -171,7 +171,7 @@ namespace DropInBadAPI.Controllers.MobilePlayer
                 return StatusCode(500, new Response<object> { Status = 500, Message = errorMessage });
             }
             
-            return Ok(new Response<object> { Status = 200, Message = errorMessage });
+            return Ok(new Response<object> { Status = 200, Message = errorMessage, Data = new { QrCode = qrCodeStr, BillId = billId } });
         }
 
         [HttpPost("{id}/toggle-pause")]
