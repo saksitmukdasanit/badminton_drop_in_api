@@ -505,7 +505,16 @@ namespace DropInBadAPI.Services
                                 lineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                                 totalAmount += item.Amount;
                             }
-                            foreach (var pb in pendingBills) pb.Status = 3;
+                        }
+                    }
+
+                    // --- NEW: ยกเลิกบิลค้างชำระเดิมทั้งหมดเสมอ เพื่อป้องกันยอดซ้ำซ้อน ---
+                    if (!isPreview)
+                    {
+                        var allPendingBills = await _context.ParticipantBills.Where(b => b.SessionId == session.SessionId && b.UserId == userId && b.WalkinId == walkinId && b.Status == 1).ToListAsync();
+                        foreach (var pb in allPendingBills)
+                        {
+                            pb.Status = 3; // 3 = Cancelled
                         }
                     }
 
@@ -618,6 +627,14 @@ namespace DropInBadAPI.Services
                     "PAYMENT_CONFIRMED_BY_ORGANIZER",
                     bill.SessionId
                 );
+            }
+
+            // --- NEW: เพิ่มการส่ง SignalR ให้อัปเดตกระดานและบอกแอปฝั่งผู้เล่น ---
+            await BroadcastLiveStateChange(bill.SessionId, organizerUserId);
+            if (bill.UserId.HasValue)
+            {
+                // ส่ง Event เข้า Group ด้วย เพื่อให้แอปผู้เล่น (ที่เปิดหน้ากระดานอยู่) เด้ง popup แล้วกลับหน้าหลัก
+                await _hubContext.Clients.Group($"session-{bill.SessionId}").SendAsync("PlayerCheckedOut", bill.UserId.Value);
             }
 
             return (true, "Payment recorded successfully", null);
@@ -1089,7 +1106,7 @@ namespace DropInBadAPI.Services
                     SkillLevelName = p.SkillLevel.LevelName,
                     SkillLevelColor = p.SkillLevel.ColorHexCode,
                     IsCheckedIn = p.CheckinTime != null,
-                    Status = p.Status ?? 1 // NEW: Map status
+                    Status = (byte)(p.CheckoutTime != null ? (p.Status ?? 1) + 10 : (p.Status ?? 1)) // NEW: Map status & Checkout
                 })
                 .ToListAsync();
 
@@ -1110,7 +1127,7 @@ namespace DropInBadAPI.Services
                     SkillLevelName = g.SkillLevel.LevelName,
                     SkillLevelColor = g.SkillLevel.ColorHexCode,
                     IsCheckedIn = g.CheckinTime != null,
-                    Status = g.Status ?? 1 // NEW: Map status
+                    Status = (byte)(g.CheckoutTime != null ? (g.Status ?? 1) + 10 : (g.Status ?? 1)) // NEW: Map status & Checkout
                 })
                 .ToListAsync();
 

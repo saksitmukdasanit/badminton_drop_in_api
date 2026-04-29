@@ -1060,7 +1060,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             return result;
         }
 
-        public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId, string? keyword = null, int page = 1, int limit = 10)
+        public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId, string? keyword = null, string? timeRange = null, int page = 1, int limit = 10)
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
             decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
@@ -1079,6 +1079,26 @@ namespace DropInBadAPI.Service.Mobile.Game
                     (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)) ||
                     (isDateSearch && s.SessionDate == searchDate)
                 );
+            }
+            
+            // --- NEW: กรองข้อมูลตามช่วงเวลา (Smart Backend) ---
+            if (!string.IsNullOrWhiteSpace(timeRange) && timeRange != "ทั้งหมด")
+            {
+                if (timeRange == "วันนี้")
+                {
+                    query = query.Where(s => s.SessionDate == today);
+                }
+                else if (timeRange == "สัปดาห์นี้")
+                {
+                    int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
+                    var startOfWeek = today.AddDays(-1 * diff);
+                    var endOfWeek = startOfWeek.AddDays(6);
+                    query = query.Where(s => s.SessionDate >= startOfWeek && s.SessionDate <= endOfWeek);
+                }
+                else if (timeRange == "เดือนนี้")
+                {
+                    query = query.Where(s => s.SessionDate.Month == today.Month && s.SessionDate.Year == today.Year);
+                }
             }
 
             var sessions = await query

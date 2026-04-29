@@ -1254,13 +1254,16 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                                 finalLineItems.Add(new BillLineItem { Description = item.Description, Amount = item.Amount });
                                 finalTotalAmount += item.Amount;
                             }
-
-                            // ยกเลิกบิลที่ค้างชำระทั้งหมด เพื่อสร้างบิลใหม่ใบเดียวตามรูปแบบผู้จัด
-                            foreach (var pb in pendingBills)
-                            {
-                                pb.Status = 3; // 3 = Cancelled
-                            }
                         }
+                    }
+
+                    // --- NEW: ยกเลิกบิลค้างชำระเดิมทั้งหมดเสมอ เพื่อป้องกันยอดซ้ำซ้อน ---
+                    var allPendingBills = await _context.ParticipantBills
+                        .Where(b => b.SessionId == sessionId && b.UserId == userId && b.Status == 1)
+                        .ToListAsync();
+                    foreach (var pb in allPendingBills)
+                    {
+                        pb.Status = 3; // 3 = Cancelled
                     }
 
                     if (finalTotalAmount < 0) finalTotalAmount = 0;

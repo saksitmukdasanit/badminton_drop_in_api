@@ -355,7 +355,7 @@ Table "ParticipantBills" {
   "UserID" INT [note: 'ID ของผู้เล่นที่เป็นสมาชิก (Nullable)']
   "WalkinID" INT [note: 'ID ของผู้เล่น Walk-in (Nullable)']
   "TotalAmount" DECIMAL(10,2) [not null, note: 'ยอดรวมที่ต้องชำระ']
-  "Status" TINYINT [not null, note: 'สถานะใบแจ้งหนี้: 1=ยังไม่จ่าย, 2=จ่ายแล้ว']
+  "Status" TINYINT [not null, note: 'สถานะใบแจ้งหนี้: 1=ยังไม่จ่าย, 2=จ่ายแล้ว, 3=ยกเลิก']
   "CreatedDate" DATETIME2 [not null, default: `GETUTCDATE()`, note: 'วันที่สร้างใบแจ้งหนี้']
 }
 
@@ -504,6 +504,9 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - เชื่อมต่อ API ผ่าน `ApiProvider`
   - ไม่คำนวณตัวเลขทางการเงินเอง (ยึดตามที่ API ส่งมา 100%)
   - ใช้ Optimistic UI (อัปเดตหน้าจอก่อนยิง API) ในหน้า Live State เพื่อให้ลื่นไหล
+  - **Responsive Design Strategy:** ใช้วิธีแบบผสมผสาน (Hybrid) 
+    1. โครงสร้าง (Layout): ใช้ `LayoutBuilder` แบ่งคอลัมน์สำหรับ Tablet (iPad) และจัดเรียงแนวตั้งสำหรับ Mobile
+    2. ขนาดฟอนต์ (Scaling): ใช้ฟังก์ชัน `getResponsiveFontSize` แบบ Native แต่บังคับใช้ `.clamp()` เพื่อจำกัดไม่ให้ฟอนต์ขยายใหญ่เกินขีดจำกัดบนหน้าจอแท็บเล็ต
 
 ## 7. Current Progress & Next Steps (สถานะปัจจุบัน)
 - **ล่าสุด:** 
@@ -545,11 +548,20 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - **[Completed]** แก้ไขบั๊กหน้า "การเงิน (Finance Dashboard)" ฝั่งแอปให้เข้ากันได้กับ `fl_chart` เวอร์ชันใหม่ และปรับปรุงตัวแปร State ป้องกันแอปแครชตอนเปิดดูกราฟ
   - **[Completed]** ปรับปรุง UX หน้าชำระเงิน (QR Code และ Wallet) ให้เด้งเปลี่ยนหน้าอัตโนมัติ (Auto-redirect) เมื่อได้รับ Webhook สำเร็จ ไม่ต้องรอให้ผู้ใช้กดปุ่มยืนยันซ้ำซ้อน
   - **[Completed]** ปรับปรุง Logic การคืนเงิน (Refund) เมื่อผู้เล่นกดยกเลิกก๊วนเอง ระบบจะหักค่าธรรมเนียมแพลตฟอร์ม (Service Fee) ออกก่อนคืนเงินเข้า Wallet ผู้เล่นให้ถูกต้องตามนโยบาย
+  - **[Completed]** ย้าย Logic การกรองวันที่ (Filter) ในหน้าการเงิน (Finance) จากหน้าบ้าน (Frontend) ไปจัดการที่หลังบ้าน (Backend) ผ่าน Entity Framework (Smart Backend)
+  - **[Completed]** เพิ่มการยิง SignalR `PlayerCheckedOut` จากฝั่งผู้จัดไปยังฝั่งผู้เล่นเมื่อรับเงินสดสำเร็จ เพื่อให้แอปผู้เล่นเตรียมพร้อมเด้งแจ้งเตือนและเปลี่ยนหน้าอัตโนมัติ
+  - **[Completed]** ปรับปรุง UX หน้าเช็คบิลผู้เล่น (ExpensePanel) ซิงค์ข้อมูลให้โหลดบิลและยอดรวมใหม่ทันทีเมื่อผู้จัดกดยกเลิกสแกน QR
+  - **[Completed]** เพิ่ม `WidgetsBindingObserver` ในหน้ากระดานผู้เล่น เพื่อบังคับให้แอปเชื่อมต่อ SignalR และโหลดข้อมูลใหม่ทันทีเมื่อผู้ใช้ปลุกแอปจากพื้นหลัง (Background/Sleep)
+  - **[Completed]** แก้ไขหน้า `ExpensePanel` ในหน้าควบคุมกระดาน (ManageGame) ให้ดึงข้อมูลบิลและยอดค้างชำระใหม่ทันทีเมื่อผู้จัดปิดหน้าต่าง QR Code
+  - **[Completed]** แก้ไขบั๊กยอดหนี้ซ้ำซ้อน บังคับยกเลิกบิลค้างชำระใบเก่า (Status = 3) เสมอเมื่อออกบิลใบใหม่ เพื่อไม่ให้หน้าประวัติผู้เล่นแสดงสถานะค้างชำระผิดพลาด
+  - **[Completed]** เพิ่ม `WidgetsBindingObserver` ในหน้ากระดานผู้จัด (`manage_game.dart`) เพื่อให้ SignalR ต่ออัตโนมัติและรีเฟรชข้อมูลป้องกัน State ค้าง (Stale Data)
+  - **[Completed]** แก้ไขปัญหากดปุ่มย้อนกลับ (Back) แล้วข้อมูลหน้าจอเป็นของเก่า โดยเพิ่มการดักคำสั่ง `.then(...)` เพื่อบังคับโหลดข้อมูลใหม่ให้เป็นปัจจุบัน 100%
   - **[Technical Debt]** `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) มีการรวม Logic ของฝั่งผู้จัดและผู้เล่นไว้ด้วยกัน (เช่น `JoinSession`, `CancelBooking`) และอาจมี Logic ทับซ้อนกับ `MatchManagementService.cs` ตัดสินใจชะลอการ Refactor ไว้ก่อนเพื่อรักษาความเสถียร
 - **สิ่งที่ต้องทำต่อ:**
   1. ทำระบบ Social Login (Google / Apple / LINE) ด้วยการ Verify Token ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
   2. ทำระบบแชร์ก๊วน (Share / Deep Linking) เพื่อให้ผู้จัดส่งลิงก์ชวนเพื่อนทาง Social Media / LINE ได้
   3. เตรียมความพร้อมแอปพลิเคชันก่อนขึ้น Store (App Icon, Splash Screen, Permissions)
+  4. Audit UX/UI และจัดการ Responsive Design (Font Size, Layout) ให้แสดงผลได้สวยงามสม่ำเสมอในทุกขนาดหน้าจอ (Mobile/Tablet)
 
 ## 8. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
 เพื่อรักษามาตรฐานสถาปัตยกรรมของโปรเจกต์ ให้ AI อ้างอิงการสร้างหรือแก้ไขไฟล์ตามโครงสร้างนี้:
@@ -575,3 +587,6 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - `/user/` -> หน้าสำหรับผู้เล่น (ค้นหาก๊วน, จ่ายเงิน, กระเป๋าเงิน)
 - `lib/shared/` -> Core Logic, API Provider, State Management (Providers)
 - `lib/widget/` -> Custom Widgets เฉพาะทาง
+
+<!-- ตัวอย่างการแจ้งแก้ UI ให้ผม
+เครื่องที่เทส: iPad Mini 5 (หรือ iPhone SE, Galaxy S23) หน้าจอ: จัดการก๊วน manage_game.dart ปัญหาที่เจอ: ในการ์ดสนามตรงปุ่ม Pause ไอคอนมันเล็กเกินไป และชื่อผู้เล่นในช่องมันยาวจนตกบรรทัดไปทับขอบการ์ด -->
