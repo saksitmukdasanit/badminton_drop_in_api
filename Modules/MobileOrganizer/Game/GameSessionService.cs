@@ -126,9 +126,15 @@ namespace DropInBadAPI.Service.Mobile.Game
                     // --- แจ้งเตือนผู้ติดตาม (Followers) ของผู้จัดเกี่ยวกับก๊วนใหม่ ---
                     var organizer = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerUserId);
                     var followers = await _context.UserFollows.Where(f => f.OrganizerId == organizerUserId).Select(f => f.FollowerId).ToListAsync();
+                    
+                    var thaiCulture = new CultureInfo("th-TH");
+                    string sessionDateStr = newSession.SessionDate.ToString("dd/MM/yyyy", thaiCulture);
+                    string timeStr = $"{newSession.StartTime.ToString("HH:mm")} - {newSession.EndTime.ToString("HH:mm")} น.";
+                    string notiMessage = $"'{organizer?.UserProfile?.Nickname}' ได้สร้างก๊วน '{newSession.GroupName}' วันที่ {sessionDateStr} เวลา {timeStr}";
+
                     foreach(var followerId in followers)
                     {
-                        await _notificationService.SendNotificationAsync(followerId, "ก๊วนใหม่จากผู้จัดที่คุณติดตาม", $"'{organizer?.UserProfile?.Nickname}' ได้สร้างก๊วน '{newSession.GroupName}'", "NEW_SESSION_FROM_FOLLOWED_ORGANIZER", newSession.SessionId);
+                        await _notificationService.SendNotificationAsync(followerId, "ก๊วนใหม่จากผู้จัดที่คุณติดตาม", notiMessage, "NEW_SESSION_FROM_FOLLOWED_ORGANIZER", newSession.SessionId);
                     }
 
                     // คืนค่าหลังจาก Commit สำเร็จ
@@ -982,129 +988,76 @@ namespace DropInBadAPI.Service.Mobile.Game
             var today = DateOnly.FromDateTime(DateTime.Now);
             var thaiCulture = new CultureInfo("th-TH");
 
-            var sessions = await _context.GameSessions
-        .Where(s => s.CreatedByUserId == organizerUserId && s.SessionDate >= today && (s.Status == 1 || s.Status == 2))
-        .Include(s => s.Venue)
-        .Include(s => s.GameSessionPhotos)
-        .Include(s => s.CreatedByUser.UserProfile)
-        .Include(s => s.SessionParticipants) // Include ไว้เพื่อนับจำนวน
-        .Include(s => s.SessionWalkinGuests) // Include ไว้เพื่อนับจำนวน
-        .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: Include LineItems เพื่อหักค่าธรรมเนียม
-        .Include(s => s.GameType)
-        .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
-        .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion (เซิร์ฟเวอร์ตัดจบทำให้ไม่พบข้อมูล)
-        .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
-        .Select(s => new UpcomingSessionCardDto
-        {
-            // --- Map ข้อมูลทั้งหมดเหมือนเดิม ---
-            SessionId = s.SessionId,
-            GroupName = s.GroupName,
-            ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
-            DayOfWeek = s.SessionDate.ToDateTime(TimeOnly.MinValue).ToString("dddd", thaiCulture),
-            SessionDate = s.SessionDate.ToString("dd/MM/yyyy", thaiCulture),
-            StartTime = s.StartTime.ToString("HH:mm"),
-            EndTime = s.EndTime.ToString("HH:mm"),
-            SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-            CourtName = s.Venue.VenueName,
-            Location = s.Venue.Address,
-            Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue)
-                  ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท"
-                  : "สอบถามผู้จัด",
-            CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
-            ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
-            OrganizerName = s.CreatedByUser!.UserProfile!.Nickname ?? "N/A",
-            OrganizerImageUrl = s.CreatedByUser.UserProfile.ProfilePhotoUrl,
-            IsBookmarked = false,
-            MaxParticipants = s.MaxParticipants,
-            CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) +
-                                  s.SessionWalkinGuests.Count(g => g.Status == 1),
-            GameTypeName = s.GameType!.TypeName,
-            ShuttlecockBrandName = s.ShuttlecockModel!.Brand!.BrandName,
-            ShuttlecockModelName = s.ShuttlecockModel.ModelName,
-            CourtImageUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
-            Status = s.Status,
-            CourtNumbers = s.CourtNumbers,
-            // ให้ Server เป็นคนบอกว่าเข้าสู่ระยะ 3 ชั่วโมงก่อนเริ่มเกมหรือยัง (ใช้เวลา UTC เทียบกับ UTC)
-            CanStartSession = (s.SessionDate.ToDateTime(s.StartTime) - DateTime.UtcNow).TotalMinutes <= 180,
-            Notes = s.Notes,
+            // 1. โหลดข้อมูลทั้งหมดมาเก็บใน Memory ก่อน (เพื่อเลี่ยงปัญหา EF Core แปลง C# เป็น SQL ไม่ได้)
+            var rawSessions = await _context.GameSessions
+                .Where(s => s.CreatedByUserId == organizerUserId && s.SessionDate >= today && (s.Status == 1 || s.Status == 2))
+                .Include(s => s.Venue)
+                .Include(s => s.GameSessionPhotos)
+                .Include(s => s.CreatedByUser).ThenInclude(u => u.UserProfile)
+                .Include(s => s.SessionParticipants).ThenInclude(p => p.User).ThenInclude(u => u.UserProfile)
+                .Include(s => s.SessionParticipants).ThenInclude(p => p.SkillLevel)
+                .Include(s => s.SessionWalkinGuests).ThenInclude(g => g.SkillLevel)
+                .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems)
+                .Include(s => s.GameType)
+                .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
+                .Include(s => s.GameSessionFacilities).ThenInclude(f => f.Facility)
+                .AsSplitQuery()
+                .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
+                .ToListAsync();
 
-            // --- NEW: คำนวณรายได้ (ต้องเพิ่ม Property ใน DTO ก่อน) ---
-            // PaidAmount = ยอดรวมบิลที่จ่ายแล้ว (Status = 2) โดยหักค่าธรรมเนียมแพลตฟอร์มออกเพื่อให้เป็นรายได้สุทธิ
-            PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าธรรมเนียม").Sum(li => li.Amount),
-            // TotalIncome = (จำนวนคน * ราคาต่อคน)
-            TotalIncome = (s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1)) * ((s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0)),
-
-            Facilities = new List<FacilityDto>(),
-            Participants = new List<ParticipantDto>()
-        })
-        .ToListAsync(); // <--- จบ Query ที่ 1 (ได้ข้อมูลก๊วนทั้งหมดมาแล้ว)
-
-            if (!sessions.Any())
+            var result = new List<UpcomingSessionCardDto>();
+            
+            foreach (var s in rawSessions)
             {
-                return sessions; // ถ้าไม่เจอก๊วนเลย ก็คืนค่าลิสต์ว่างๆ กลับไป
-            }
-            foreach (var session in sessions)
-            {
-                // Query ย่อยที่ 1: ดึงผู้เล่นที่เป็นสมาชิก
-                var members = await _context.SessionParticipants
-                    .Where(p => p.SessionId == session.SessionId && p.Status != 3)
-                    .Include(p => p.User.UserProfile)
-                    .Include(p => p.SkillLevel)
-                    .Select(p => new ParticipantDto
-                    {
-                        ParticipantId = p.ParticipantId,
-                        ParticipantType = "Member",
-                        UserId = p.UserId,
-                        Nickname = p.User!.UserProfile!.Nickname,
-                        FullName = p.User.UserProfile.FirstName + " " + p.User.UserProfile.LastName,
-                        GenderName = p.User.UserProfile.Gender == 1 ? "ชาย" :
-                    p.User.UserProfile.Gender == 2 ? "หญิง" :
-                    p.User.UserProfile.Gender == 3 ? "อื่นๆ" : null,
-                        ProfilePhotoUrl = p.User.UserProfile.ProfilePhotoUrl,
-                        SkillLevelId = p.SkillLevelId,
-                        SkillLevelName = p.SkillLevel!.LevelName,
-                        SkillLevelColor = p.SkillLevel.ColorHexCode,
-                        Status = p.Status ?? 1,
-                        CheckinTime = p.CheckinTime
-                    }).ToListAsync(); // <--- ทำงานใน C#
+                var sessionStartDt = s.SessionDate.ToDateTime(s.StartTime);
+                
+                var dto = new UpcomingSessionCardDto
+                {
+                    SessionId = s.SessionId,
+                    GroupName = s.GroupName,
+                    ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
+                    DayOfWeek = sessionStartDt.ToString("dddd", thaiCulture),
+                    SessionDate = sessionStartDt.ToString("dd/MM/yyyy", thaiCulture),
+                    StartTime = s.StartTime.ToString("HH:mm"),
+                    EndTime = s.EndTime.ToString("HH:mm"),
+                    SessionStart = sessionStartDt,
+                    CourtName = s.Venue.VenueName,
+                    Location = s.Venue.Address,
+                    Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue)
+                          ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท"
+                          : "สอบถามผู้จัด",
+                    CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
+                    ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
+                    OrganizerName = s.CreatedByUser?.UserProfile?.Nickname ?? "N/A",
+                    OrganizerImageUrl = s.CreatedByUser?.UserProfile?.ProfilePhotoUrl,
+                    IsBookmarked = false,
+                    MaxParticipants = s.MaxParticipants,
+                    CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1),
+                    GameTypeName = s.GameType?.TypeName,
+                    ShuttlecockBrandName = s.ShuttlecockModel?.Brand?.BrandName,
+                    ShuttlecockModelName = s.ShuttlecockModel?.ModelName,
+                    CourtImageUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
+                    Status = s.Status,
+                    CourtNumbers = s.CourtNumbers,
+                    // Smart Backend: ตรวจสอบเวลาโดยอิงจากเวลาประเทศไทย (UTC+7)
+                    CanStartSession = (sessionStartDt - DateTime.UtcNow.AddHours(7)).TotalMinutes <= 180,
+                    Notes = s.Notes,
+                    PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าธรรมเนียม").Sum(li => li.Amount),
+                    TotalIncome = (s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1)) * ((s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0)),
+                    
+                    Facilities = s.GameSessionFacilities.Select(f => new FacilityDto(f.FacilityId, f.Facility.FacilityName, f.Facility.IconUrl)).ToList(),
+                    Participants = new List<ParticipantDto>()
+                };
 
-                // Query ย่อยที่ 2: ดึงผู้เล่นที่เป็น Walk-in
-                var guests = await _context.SessionWalkinGuests
-                    .Where(g => g.SessionId == session.SessionId && g.Status != 3)
-                    .Include(g => g.SkillLevel)
-                    .Select(g => new ParticipantDto
-                    {
-                        ParticipantId = g.WalkinId,
-                        ParticipantType = "Guest",
-                        UserId = null,
-                        Nickname = g.GuestName,
-                        FullName = null,
-                        GenderName = g.Gender == 1 ? "ชาย" :
-                    g.Gender == 2 ? "หญิง" :
-                    g.Gender == 3 ? "อื่นๆ" : null,
-                        ProfilePhotoUrl = null,
-                        SkillLevelId = g.SkillLevelId,
-                        SkillLevelName = g.SkillLevel!.LevelName,
-                        SkillLevelColor = g.SkillLevel.ColorHexCode,
-                        Status = g.Status ?? 1,
-                        CheckinTime = g.CheckinTime
-                    }).ToListAsync(); // <--- ทำงานใน C#
+                var activeMembers = s.SessionParticipants.Where(p => p.Status != 3).Select(p => CreateParticipantDto(p)).ToList();
+                var activeGuests = s.SessionWalkinGuests.Where(g => g.Status != 3).Select(g => CreateParticipantDto(g)).ToList();
 
-                session.Facilities = await _context.GameSessionFacilities
-                        .Where(f => f.SessionId == session.SessionId)
-                        .Include(f => f.Facility)
-                        .Select(f => new FacilityDto(f.FacilityId, f.Facility.FacilityName, f.Facility.IconUrl))
-                        .ToListAsync();
+                dto.Participants = activeMembers.Concat(activeGuests).OrderBy(p => p.Status).ThenBy(p => p.ParticipantId).ToList();
 
-                // 3. รวมสองลิสต์นี้เข้าด้วยกัน (ตอนนี้ทำใน C# แล้ว EF ไม่ต้องแปล)
-                session.Participants = members.Concat(guests)
-                                            .OrderBy(p => p.Status)
-                                            .ThenBy(p => p.ParticipantId)
-                                            .ToList();
-
+                result.Add(dto);
             }
 
-            return sessions;
+            return result;
         }
 
         public async Task<IEnumerable<OrganizerGameSessionDto>> GetMyPastSessionsAsync(int organizerUserId, string? keyword = null, int page = 1, int limit = 10)

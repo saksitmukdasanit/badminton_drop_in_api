@@ -541,10 +541,15 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - **[Completed]** ปรับปรุงหน้า "จัดการรายชื่อ (Roster)" ของผู้จัด ให้แสดงสถานะผู้เล่นที่ "Check-out (กลับบ้านแล้ว)" ได้อย่างชัดเจน พร้อมย้าย Logic ตรวจสอบเวลาไปยัง Backend
   - **[Completed]** ปิดการทำงานของ Auto Backup ใน Android (`AndroidManifest.xml`) เพื่อแก้ปัญหา Token ล็อกอินเก่าค้างอยู่ในเครื่องหลังจากลบและติดตั้งแอปใหม่
   - **[Completed]** ปรับปรุงหน้า UI การแจ้งเตือน (Notification) ให้แสดง Icon และสีที่แตกต่างกันตามประเภทของ Noti เพื่อความสวยงามและแยกแยะง่ายขึ้น
+  - **[Completed]** แก้ไขปัญหา Entity Framework (EF Core) ฝั่ง Backend แครชจากการดึงข้อมูล (Cartesian Explosion) ในหน้า Manage โดยดึงข้อมูลดิบลง Memory ก่อนทำ DTO Projection
+  - **[Completed]** แก้ไขบั๊กหน้า "การเงิน (Finance Dashboard)" ฝั่งแอปให้เข้ากันได้กับ `fl_chart` เวอร์ชันใหม่ และปรับปรุงตัวแปร State ป้องกันแอปแครชตอนเปิดดูกราฟ
+  - **[Completed]** ปรับปรุง UX หน้าชำระเงิน (QR Code และ Wallet) ให้เด้งเปลี่ยนหน้าอัตโนมัติ (Auto-redirect) เมื่อได้รับ Webhook สำเร็จ ไม่ต้องรอให้ผู้ใช้กดปุ่มยืนยันซ้ำซ้อน
+  - **[Completed]** ปรับปรุง Logic การคืนเงิน (Refund) เมื่อผู้เล่นกดยกเลิกก๊วนเอง ระบบจะหักค่าธรรมเนียมแพลตฟอร์ม (Service Fee) ออกก่อนคืนเงินเข้า Wallet ผู้เล่นให้ถูกต้องตามนโยบาย
   - **[Technical Debt]** `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) มีการรวม Logic ของฝั่งผู้จัดและผู้เล่นไว้ด้วยกัน (เช่น `JoinSession`, `CancelBooking`) และอาจมี Logic ทับซ้อนกับ `MatchManagementService.cs` ตัดสินใจชะลอการ Refactor ไว้ก่อนเพื่อรักษาความเสถียร
 - **สิ่งที่ต้องทำต่อ:**
-  1. ทำระบบแชร์ก๊วน (Share / Deep Linking) เพื่อให้ผู้จัดส่งลิงก์ชวนเพื่อนทาง Social Media / LINE ได้
-  2. เตรียมความพร้อมแอปพลิเคชันก่อนขึ้น Store (App Icon, Splash Screen, Permissions)
+  1. ทำระบบ Social Login (Google / Apple / LINE) ด้วยการ Verify Token ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
+  2. ทำระบบแชร์ก๊วน (Share / Deep Linking) เพื่อให้ผู้จัดส่งลิงก์ชวนเพื่อนทาง Social Media / LINE ได้
+  3. เตรียมความพร้อมแอปพลิเคชันก่อนขึ้น Store (App Icon, Splash Screen, Permissions)
 
 ## 8. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
 เพื่อรักษามาตรฐานสถาปัตยกรรมของโปรเจกต์ ให้ AI อ้างอิงการสร้างหรือแก้ไขไฟล์ตามโครงสร้างนี้:
