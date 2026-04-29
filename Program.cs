@@ -158,7 +158,7 @@ builder.Services.AddAuthorization();
 
 // --- Firebase Admin SDK Initialization ---
 // ตรวจสอบว่ามีไฟล์ Service Account Key ของ Firebase หรือไม่
-var firebaseConfigPath = Path.Combine(Directory.GetCurrentDirectory(), "firebase-adminsdk.json");
+var firebaseConfigPath = Path.Combine(AppContext.BaseDirectory, "firebase-adminsdk.json");
 if (File.Exists(firebaseConfigPath))
 {
     FirebaseApp.Create(new AppOptions()
@@ -166,6 +166,10 @@ if (File.Exists(firebaseConfigPath))
         Credential = GoogleCredential.FromFile(firebaseConfigPath),
     });
     Console.WriteLine("Firebase Admin SDK Initialized.");
+}
+else
+{
+    Console.WriteLine($"[WARNING] Firebase Admin SDK Config file not found at: {firebaseConfigPath}");
 }
 // -----------------------------------------
 

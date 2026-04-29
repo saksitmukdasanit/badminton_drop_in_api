@@ -298,7 +298,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                     bool hasPendingBill = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1);
                     bool hasUnpaidBalance = expectedTotal - paidAmount > 0.1m;
-                    isUnpaid = hasPendingBill || (hasUnpaidBalance && (s.Status >= 4 || userParticipation?.CheckoutTime != null));
+                    // FIX: แสดงสถานะค้างชำระก็ต่อเมื่อผู้เล่นทำการ Checkout หรือก๊วนจบแล้วเท่านั้น เพื่อไม่ให้ปุ่มเข้ากระดานหายไประหว่างกำลังตีอยู่
+                    isUnpaid = (hasPendingBill || hasUnpaidBalance) && (s.Status >= 4 || userParticipation?.CheckoutTime != null);
                 }
 
                 return new UpcomingSessionCardDto
@@ -336,9 +337,12 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             return new MyGameSessionsResponseDto
             {
-                Playing = dtos.Where(d => (d.Status == 2 || d.Status == 6) && d.UserStatus != "Refund").ToList(),
+                // กำลังเล่น และ กำลังมาถึง: เรียงจากใกล้ถึงที่สุด (Ascending)
+                Playing = dtos.Where(d => (d.Status == 2 || d.Status == 6) && d.UserStatus != "Refund")
+                              .OrderBy(d => d.SessionStart).ToList(),
                 Refund = dtos.Where(d => d.UserStatus == "Refund" || d.Status == 3 || d.Status == 4).ToList(),
-                Upcoming = dtos.Where(d => !(d.Status == 2 || d.Status == 6) && !(d.UserStatus == "Refund" || d.Status == 3 || d.Status == 4)).ToList()
+                Upcoming = dtos.Where(d => !(d.Status == 2 || d.Status == 6) && !(d.UserStatus == "Refund" || d.Status == 3 || d.Status == 4))
+                               .OrderBy(d => d.SessionStart).ToList()
             };
         }
 

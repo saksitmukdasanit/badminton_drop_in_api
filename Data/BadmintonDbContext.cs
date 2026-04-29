@@ -72,6 +72,8 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<WalletTransaction> WalletTransactions { get; set; }
 
+    public virtual DbSet<UserFcmToken> UserFcmTokens { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bank>(entity =>
@@ -646,6 +648,25 @@ public partial class BadmintonDbContext : DbContext
                 .HasForeignKey(d => d.WalletId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_WalletTransactions_WalletID");
+        });
+
+        modelBuilder.Entity<UserFcmToken>(entity =>
+        {
+            entity.HasKey(e => e.TokenId).HasName("UserFcmTokens_pkey");
+            entity.HasIndex(e => e.Token, "IX_UserFcmTokens_Token").IsUnique(); // Token ต้องไม่ซ้ำ
+            entity.HasIndex(e => e.UserId, "IX_UserFcmTokens_UserID");
+
+            entity.Property(e => e.TokenId).HasColumnName("TokenID");
+            entity.Property(e => e.UserId).HasColumnName("UserID");
+            entity.Property(e => e.Token).IsRequired();
+            entity.Property(e => e.DeviceName).HasMaxLength(255);
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+            entity.Property(e => e.UpdatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.User).WithMany(p => p.UserFcmTokens)
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_UserFcmTokens_UserID");
         });
 
         OnModelCreatingPartial(modelBuilder);

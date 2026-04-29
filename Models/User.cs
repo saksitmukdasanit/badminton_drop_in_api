@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 
 namespace DropInBadAPI.Models;
@@ -36,4 +36,6 @@ public partial class User
     public virtual UserProfile? UserProfile { get; set; }
 
     public virtual UserWallet? UserWallet { get; set; }
+
+    public virtual ICollection<UserFcmToken> UserFcmTokens { get; set; } = new List<UserFcmToken>();
 }

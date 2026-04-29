@@ -424,6 +424,18 @@ Table "WalletTransactions" {
   "CreatedDate" timestamp [not null, default: `now()`]
 }
 
+Table "UserFcmTokens" {
+  "TokenID" int [pk, increment]
+  "UserID" int [not null]
+  "Token" text [not null, unique]
+  "DeviceName" varchar(255)
+  "CreatedDate" timestamp [not null, default: `now()`]
+  "UpdatedDate" timestamp [not null, default: `now()`]
+  
+  Indexes {
+    "UserID" [name: "IX_UserFcmTokens_UserID"]
+  }
+}
 
 // เพิ่มในส่วน Relationships
 Ref: "Users"."UserID" < "UserFollows"."FollowerId"
@@ -478,6 +490,7 @@ Ref: "GameSessions"."SessionID" < "UserBookmarkedSessions"."SessionId"
 
 Ref: "UserWallets"."UserID" - "Users"."UserID"
 Ref: "WalletTransactions"."WalletID" > "UserWallets"."WalletID"
+Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 
 ```
 
@@ -511,6 +524,49 @@ Ref: "WalletTransactions"."WalletID" > "UserWallets"."WalletID"
   - ผูกระบบ API สร้างบัญชีย่อย (Sub-account) บน Xendit อัตโนมัติเมื่อผู้ใช้กดสมัครเป็นผู้จัด (Apply Organizer)
   - ทดสอบระบบ Xendit Simulate Payment (E2E) และตั้งค่า Webhook บนเซิร์ฟเวอร์จริงสำเร็จ
   - แก้ไขบั๊กหน้าต่าง QR Code ไม่ปิดอัตโนมัติ โดยปรับแก้การยิง SignalR ฝั่ง Backend ให้ระบุเป้าหมายรายบุคคล (User/Group) และเพิ่ม Listener `QrPaymentSuccess` ในฝั่งแอป Flutter
+  - อัปเดต API `player/gamesessions/my` ฝั่ง Backend ให้เรียงลำดับก๊วน "กำลังมาถึง" แบบ Ascending (ใกล้ถึงที่สุดขึ้นก่อน)
+  - วางระบบแจ้งเตือน Firebase Cloud Messaging (FCM) แบบสมบูรณ์ รองรับการทำงานทั้งตอนเปิดแอป (Foreground) และปิดแอป (Background/Terminated)
+  - เพิ่มระบบ Notification Badge (ป้ายแจ้งเตือนสีแดง) ผ่าน `NotificationProvider` เพื่อให้แสดงจำนวนที่ยังไม่อ่านบน AppBar แบบ Real-time
+  - เพิ่มการยิง Push Notification ฝั่งผู้จัดในเหตุการณ์: สร้างก๊วนใหม่ (แจ้งผู้ติดตาม), เปิดก๊วน/เริ่มการแข่งขัน, และจบการแข่งขัน
+  - แก้ไขปัญหา "เริ่มเกมไม่สำเร็จ (Timeout)" ฝั่งผู้จัด โดยขยายเวลา Timeout ใน `api_provider.dart` เป็น 30 วินาที และดักจับ Timeout Error เพื่อทำ Optimistic UI อัปเดตข้อมูลเงียบๆ ไม่ให้รบกวนการจัดทีม
+  - ปรับปรุง Backend ระบบ Notification ให้เป็นแบบ Fire-and-forget (ทำงานเบื้องหลังด้วย `Task.Run` และ `IServiceScopeFactory`) เพื่อให้ API ตอบสนองไวปานสายฟ้า ไม่ถูกบล็อกจากการยิงแจ้งเตือนทีละหลายคน
+  - แก้ไขบั๊กหน้า "เกมส์ของฉัน" (ฝั่งผู้เล่น): ป้องกันปุ่มคิวการเล่นหายไประหว่างเกมเมื่อผู้จัดเพิ่มค่าใช้จ่าย โดยจะเปลี่ยนสถานะเป็นค้างชำระ (Pending Payment) ก็ต่อเมื่อ Checkout แล้วเท่านั้น
+  - ปรับปรุง Logic หน้าจองก๊วน (Booking Confirm): นำการคำนวณเวลาจากฝั่งหน้าบ้าน (Frontend) ออกทั้งหมด เพื่อให้ปุ่มเข้าสู่กระดานและปุ่มชำระเงินทำงานตามสถานะที่ได้รับจาก Backend 100% (Smart Backend, Dumb Frontend)
+  - โละ Logic การตัดต่อ String วันที่/เวลา บนแอปทิ้ง (ในหน้า `MyGameUserPage`) และเชื่อถือค่า `SessionStart` ที่ถูกคำนวณมาจาก Backend 100%
+  - อุดช่องโหว่เมื่อมีการ "ลบสนาม" ในหน้ากระดานผู้จัด Backend จะเป็นผู้รับผิดชอบเคลียร์คิวที่จัดค้างไว้ในคอร์ทที่โดนลบ (Orphaned Staged Matches) ทิ้ง และปล่อยผู้เล่นกลับสู่คิวรออัตโนมัติ เพื่อป้องกันฐานข้อมูลรกและ UI รวน
+  - แก้ไขปัญหา Push Notification ไม่ทำงานบนเครื่องจริง โดยการเพิ่ม Logic การส่ง FCM Token ไปยัง Backend ในจังหวะ Auto-Login (ตอน Refresh Token) เพื่อให้แน่ใจว่า Backend มี "ที่อยู่" สำหรับส่ง Noti เสมอ
+  - เพิ่ม Priority ใน Payload ของ FCM ฝั่ง Backend เพื่อบังคับให้ Noti เด้งทันที ทะลุโหมดประหยัดพลังงาน (Doze Mode) ของ Android
+  - แก้ไขบั๊กการคำนวณยอดเงินในหน้า "ประวัติการจัดก๊วน" และ "ดูรายงาน" ของผู้จัด โดยป้องกันการนำบิลค้างชำระ (Status = 1) มาบวกซ้ำกับบิลที่จ่ายแล้ว (Status = 2) เพื่อให้ยอดรวมถูกต้อง
+  - **[Completed]** แก้ไขโครงสร้างและ Logic ของตาราง `UserLogins` ฝั่ง Backend ที่ใช้เก็บ FCM Token โดยแยกออกมาเป็นตาราง `UserFcmTokens` รองรับ 1-to-N
+  - **[Completed]** ปรับปรุงหน้า "จัดการรายชื่อ (Roster)" ของผู้จัด ให้แสดงสถานะผู้เล่นที่ "Check-out (กลับบ้านแล้ว)" ได้อย่างชัดเจน พร้อมย้าย Logic ตรวจสอบเวลาไปยัง Backend
+  - **[Completed]** ปิดการทำงานของ Auto Backup ใน Android (`AndroidManifest.xml`) เพื่อแก้ปัญหา Token ล็อกอินเก่าค้างอยู่ในเครื่องหลังจากลบและติดตั้งแอปใหม่
+  - **[Completed]** ปรับปรุงหน้า UI การแจ้งเตือน (Notification) ให้แสดง Icon และสีที่แตกต่างกันตามประเภทของ Noti เพื่อความสวยงามและแยกแยะง่ายขึ้น
+  - **[Technical Debt]** `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) มีการรวม Logic ของฝั่งผู้จัดและผู้เล่นไว้ด้วยกัน (เช่น `JoinSession`, `CancelBooking`) และอาจมี Logic ทับซ้อนกับ `MatchManagementService.cs` ตัดสินใจชะลอการ Refactor ไว้ก่อนเพื่อรักษาความเสถียร
 - **สิ่งที่ต้องทำต่อ:**
   1. ทำระบบแชร์ก๊วน (Share / Deep Linking) เพื่อให้ผู้จัดส่งลิงก์ชวนเพื่อนทาง Social Media / LINE ได้
   2. เตรียมความพร้อมแอปพลิเคชันก่อนขึ้น Store (App Icon, Splash Screen, Permissions)
+
+## 8. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
+เพื่อรักษามาตรฐานสถาปัตยกรรมของโปรเจกต์ ให้ AI อ้างอิงการสร้างหรือแก้ไขไฟล์ตามโครงสร้างนี้:
+
+### 8.1 Backend (.NET 8 API) - Modular Architecture
+- `DropInBadAPI/Models/` -> เก็บ Entity Classes ทั้งหมด (Database Schema)
+- `DropInBadAPI/Data/` -> เก็บ `BadmintonDbContext.cs` (EF Core)
+- `DropInBadAPI/Modules/` -> เก็บ Logic แบ่งตาม Domain (Feature Folders):
+  - `/Auth/` -> ระบบ Login, JWT, OTP
+  - `/Master/` -> ข้อมูลพื้นฐาน (Banks, Facilities, ShuttlecockBrands)
+  - `/MobileOrganizer/` -> API สำหรับแอปฝั่งผู้จัด (แยกย่อยเป็น Game, MatchManagement, Dashboard)
+  - `/MobilePlayer/` -> API สำหรับแอปฝั่งผู้เล่น (จองก๊วน, ประวัติ, Wallet)
+  - `/Notification/` -> บริการส่ง FCM / Notification
+  - `/Shared/` -> DTOs กลางที่ใช้ร่วมกันหลาย Module
+  - `/Webhooks/` -> ตัวรับข้อมูลจากภายนอก (Xendit)
+
+### 8.2 Frontend (Flutter) - Feature-based
+- `lib/component/` -> Reusable UI Widgets (ปุ่ม, การ์ด, Dialogs)
+- `lib/model/` -> Data Models / Classes
+- `lib/page/` -> หน้าจอแอปพลิเคชัน แบ่งตาม Role:
+  - `/auth/` -> หน้า Login, Register, OTP
+  - `/organizer/` -> หน้าสำหรับผู้จัด (สร้างก๊วน, จัดการบอร์ด, ประวัติ, โปรไฟล์)
+  - `/user/` -> หน้าสำหรับผู้เล่น (ค้นหาก๊วน, จ่ายเงิน, กระเป๋าเงิน)
+- `lib/shared/` -> Core Logic, API Provider, State Management (Providers)
+- `lib/widget/` -> Custom Widgets เฉพาะทาง

@@ -1135,6 +1135,24 @@ namespace DropInBadAPI.Services
                 return false;
             }
 
+            // หาสนามที่ถูกลบไป (มีใน DB เดิม แต่ไม่มีในอัปเดตใหม่)
+            var oldCourts = session.CourtNumbers?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(c => c.Trim()).ToList() ?? new List<string>();
+            var newCourts = dto.CourtIdentifiers ?? new List<string>();
+            var deletedCourts = oldCourts.Except(newCourts).ToList();
+
+            // ลบแมตช์ที่จัดเตรียมไว้ (Staged: Status = 4) บนสนามที่ถูกลบทิ้งไป
+            if (deletedCourts.Any())
+            {
+                var orphanedMatches = session.Matches
+                    .Where(m => m.Status == 4 && m.CourtNumber != null && deletedCourts.Contains(m.CourtNumber))
+                    .ToList();
+                foreach (var match in orphanedMatches)
+                {
+                    _context.MatchPlayers.RemoveRange(match.MatchPlayers); // เอาผู้เล่นออกเพื่อให้กลับสู่ Waiting List เมื่อดึง Live State
+                }
+                _context.Matches.RemoveRange(orphanedMatches); // ลบแมตช์ทิ้ง
+            }
+
             session.CourtNumbers = string.Join(",", dto.CourtIdentifiers);
             session.NumberOfCourts = dto.CourtIdentifiers.Count;
             await _context.SaveChangesAsync();

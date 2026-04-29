@@ -52,6 +52,13 @@ namespace DropInBadAPI.Controllers.Mobile
             return Ok(new Response<object> { Status = 200, Message = "All notifications marked as read." });
         }
 
+        [HttpDelete("delete-all")]
+        public async Task<ActionResult<Response<object>>> DeleteAllNotifications()
+        {
+            await _notificationService.DeleteAllNotificationsAsync(GetCurrentUserId());
+            return Ok(new Response<object> { Status = 200, Message = "All notifications deleted successfully." });
+        }
+
         [HttpPost("fcm-token")]
         public async Task<ActionResult<Response<object>>> UpdateFcmToken([FromBody] UpdateFcmTokenDto dto)
         {

@@ -29,6 +29,7 @@ namespace DropInBadAPI.Dtos
         public List<string>? CourtImageUrls { get; init; }
         public string? CourtNumbers { get; init; }
         public string? Notes { get; init; }
+        public bool CanStartSession { get; set; }
 
         public List<FacilityDto> Facilities { get; set; } = new();
         public List<ParticipantDto> Participants { get; set; } = new();
@@ -54,6 +55,7 @@ namespace DropInBadAPI.Dtos
 
         public int Status { get; set; } // สถานะการเข้าร่วม: 1=เข้าร่วม, 2=รอคิว
         public DateTime? CheckinTime { get; set; }
+        public DateTime? CheckoutTime { get; set; }
         public int TotalGamesPlayed { get; set; } // NEW: เพิ่มฟิลด์จำนวนเกมที่เล่น
     }
 
