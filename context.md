@@ -556,6 +556,7 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - **[Completed]** แก้ไขบั๊กยอดหนี้ซ้ำซ้อน บังคับยกเลิกบิลค้างชำระใบเก่า (Status = 3) เสมอเมื่อออกบิลใบใหม่ เพื่อไม่ให้หน้าประวัติผู้เล่นแสดงสถานะค้างชำระผิดพลาด
   - **[Completed]** เพิ่ม `WidgetsBindingObserver` ในหน้ากระดานผู้จัด (`manage_game.dart`) เพื่อให้ SignalR ต่ออัตโนมัติและรีเฟรชข้อมูลป้องกัน State ค้าง (Stale Data)
   - **[Completed]** แก้ไขปัญหากดปุ่มย้อนกลับ (Back) แล้วข้อมูลหน้าจอเป็นของเก่า โดยเพิ่มการดักคำสั่ง `.then(...)` เพื่อบังคับโหลดข้อมูลใหม่ให้เป็นปัจจุบัน 100%
+  - **[Completed]** ปรับปรุงสูตร `getResponsiveFontSize` แบบ Native โดยใช้ `.clamp(0.85, 1.3)` เพื่อแก้ปัญหาฟอนต์ใหญ่ล้นจอบน iPad และฟอนต์เล็กเกินไปบนหน้าจอมือถือ
   - **[Technical Debt]** `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) มีการรวม Logic ของฝั่งผู้จัดและผู้เล่นไว้ด้วยกัน (เช่น `JoinSession`, `CancelBooking`) และอาจมี Logic ทับซ้อนกับ `MatchManagementService.cs` ตัดสินใจชะลอการ Refactor ไว้ก่อนเพื่อรักษาความเสถียร
 - **สิ่งที่ต้องทำต่อ:**
   1. ทำระบบ Social Login (Google / Apple / LINE) ด้วยการ Verify Token ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
