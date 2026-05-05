@@ -508,74 +508,10 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
     1. โครงสร้าง (Layout): ใช้ `LayoutBuilder` แบ่งคอลัมน์สำหรับ Tablet (iPad) และจัดเรียงแนวตั้งสำหรับ Mobile
     2. ขนาดฟอนต์ (Scaling): ใช้ฟังก์ชัน `getResponsiveFontSize` แบบ Native แต่บังคับใช้ `.clamp()` เพื่อจำกัดไม่ให้ฟอนต์ขยายใหญ่เกินขีดจำกัดบนหน้าจอแท็บเล็ต
 
-## 7. Current Progress & Next Steps (สถานะปัจจุบัน)
-- **ล่าสุด:** 
-  - ปรับปรุง Routing ให้รองรับการทำงานแบบ Guest (สอดคล้องกับกฎของ Apple) และทำระบบ Token Refresh แบบมี Lock
-  - อัปเดตหน้า Dashboard ฝั่งผู้เล่น (`HomeUserPage`) และฝั่งผู้จัด (`profile_organizer.dart`) ให้แสดงยอดเงินในกระเป๋า (Wallet), ยอดค้างชำระ, และสถิติที่ครบถ้วน
-  - เคลียร์ Mock Data ในหน้า `finance.dart` ฝั่งมือถือ และเชื่อมต่อ API จริงสำหรับดูยอดรายได้/ประวัติการเงินของผู้จัดสำเร็จ 100%
-  - เชื่อมโยงระบบ Tap Notification ให้เปิดแอปและ Route ไปยังหน้ารายละเอียดก๊วนได้ถูกต้องไม่ว่าจะเปิดหรือปิดแอปอยู่
-  - อุดช่องโหว่บั๊กในระบบ "สร้างก๊วนใหม่" (Validation เวลาเริ่ม-จบ, ซ่อนบั๊ก Google Places, ป้องกัน Foreign Key Error)
-  - ปรับปรุง Layout หน้า Profile ให้รองรับมือถือจอเล็กด้วย `SingleChildScrollView` (แก้ปัญหาแถบเหลืองดำล้นจอ)
-  - ปรับปรุงระบบแอปบาร์ (AppBar) และปุ่ม Back ให้ตรวจสอบประวัติหน้าจอก่อน (`context.canPop()`) เพื่อป้องกันปัญหาแอปจอดำเมื่อผู้ใช้เผลอกด Back หลังถูก Redirect
-  - อัปเดตหน้าชำระเงินก่อนจองก๊วน (`payment.dart`) โดยถอดฟอร์มบัตรเครดิตออก ให้เหลือเฉพาะการสแกน QR Code (PromptPay) และ Wallet เพื่อหลีกเลี่ยงค่าธรรมเนียม Payment Gateway ที่สูงเกินไป
-  - แก้ไขบั๊ก GoRouter ทำงานซ้อนทับกัน (Exception `!_debugLocked`) ตอนกดยืนยัน OTP และจังหวะที่ Token หมดอายุ
-  - เชื่อมต่อระบบชำระเงิน Xendit แบบ E2E: สร้าง Dynamic QR Code จาก Backend ส่งให้แอปแสดงผลในรูปแบบ Popup Dialog
-  - เพิ่มฟีเจอร์บันทึกรูปภาพ QR Code ลงเครื่อง (Gallery) ด้วย `image_gallery_saver`
-  - ปรับปรุง Flow การจอง: หากผู้เล่นกดยกเลิกหรือปิดหน้าต่าง QR โดยยังไม่จ่ายเงิน ระบบจะยิง API คืนที่นั่ง (Cancel Booking) อัตโนมัติทันที
-  - ปรับปรุง Xendit Webhook ให้ยืดหยุ่นขึ้น รองรับ Payload ทั้งแบบ QR Code และ Invoices ป้องกันปัญหา 400 Bad Request
-  - อธิบายและเปิดใช้งาน Xendit xenPlatform (Sub-accounts) แบบ Owned Account เพื่อให้ผู้จัดรับเงินเข้ากระเป๋าตัวเองได้โดยตรง
-  - ผูกระบบ API สร้างบัญชีย่อย (Sub-account) บน Xendit อัตโนมัติเมื่อผู้ใช้กดสมัครเป็นผู้จัด (Apply Organizer)
-  - ทดสอบระบบ Xendit Simulate Payment (E2E) และตั้งค่า Webhook บนเซิร์ฟเวอร์จริงสำเร็จ
-  - แก้ไขบั๊กหน้าต่าง QR Code ไม่ปิดอัตโนมัติ โดยปรับแก้การยิง SignalR ฝั่ง Backend ให้ระบุเป้าหมายรายบุคคล (User/Group) และเพิ่ม Listener `QrPaymentSuccess` ในฝั่งแอป Flutter
-  - อัปเดต API `player/gamesessions/my` ฝั่ง Backend ให้เรียงลำดับก๊วน "กำลังมาถึง" แบบ Ascending (ใกล้ถึงที่สุดขึ้นก่อน)
-  - วางระบบแจ้งเตือน Firebase Cloud Messaging (FCM) แบบสมบูรณ์ รองรับการทำงานทั้งตอนเปิดแอป (Foreground) และปิดแอป (Background/Terminated)
-  - เพิ่มระบบ Notification Badge (ป้ายแจ้งเตือนสีแดง) ผ่าน `NotificationProvider` เพื่อให้แสดงจำนวนที่ยังไม่อ่านบน AppBar แบบ Real-time
-  - เพิ่มการยิง Push Notification ฝั่งผู้จัดในเหตุการณ์: สร้างก๊วนใหม่ (แจ้งผู้ติดตาม), เปิดก๊วน/เริ่มการแข่งขัน, และจบการแข่งขัน
-  - แก้ไขปัญหา "เริ่มเกมไม่สำเร็จ (Timeout)" ฝั่งผู้จัด โดยขยายเวลา Timeout ใน `api_provider.dart` เป็น 30 วินาที และดักจับ Timeout Error เพื่อทำ Optimistic UI อัปเดตข้อมูลเงียบๆ ไม่ให้รบกวนการจัดทีม
-  - ปรับปรุง Backend ระบบ Notification ให้เป็นแบบ Fire-and-forget (ทำงานเบื้องหลังด้วย `Task.Run` และ `IServiceScopeFactory`) เพื่อให้ API ตอบสนองไวปานสายฟ้า ไม่ถูกบล็อกจากการยิงแจ้งเตือนทีละหลายคน
-  - แก้ไขบั๊กหน้า "เกมส์ของฉัน" (ฝั่งผู้เล่น): ป้องกันปุ่มคิวการเล่นหายไประหว่างเกมเมื่อผู้จัดเพิ่มค่าใช้จ่าย โดยจะเปลี่ยนสถานะเป็นค้างชำระ (Pending Payment) ก็ต่อเมื่อ Checkout แล้วเท่านั้น
-  - ปรับปรุง Logic หน้าจองก๊วน (Booking Confirm): นำการคำนวณเวลาจากฝั่งหน้าบ้าน (Frontend) ออกทั้งหมด เพื่อให้ปุ่มเข้าสู่กระดานและปุ่มชำระเงินทำงานตามสถานะที่ได้รับจาก Backend 100% (Smart Backend, Dumb Frontend)
-  - โละ Logic การตัดต่อ String วันที่/เวลา บนแอปทิ้ง (ในหน้า `MyGameUserPage`) และเชื่อถือค่า `SessionStart` ที่ถูกคำนวณมาจาก Backend 100%
-  - อุดช่องโหว่เมื่อมีการ "ลบสนาม" ในหน้ากระดานผู้จัด Backend จะเป็นผู้รับผิดชอบเคลียร์คิวที่จัดค้างไว้ในคอร์ทที่โดนลบ (Orphaned Staged Matches) ทิ้ง และปล่อยผู้เล่นกลับสู่คิวรออัตโนมัติ เพื่อป้องกันฐานข้อมูลรกและ UI รวน
-  - แก้ไขปัญหา Push Notification ไม่ทำงานบนเครื่องจริง โดยการเพิ่ม Logic การส่ง FCM Token ไปยัง Backend ในจังหวะ Auto-Login (ตอน Refresh Token) เพื่อให้แน่ใจว่า Backend มี "ที่อยู่" สำหรับส่ง Noti เสมอ
-  - เพิ่ม Priority ใน Payload ของ FCM ฝั่ง Backend เพื่อบังคับให้ Noti เด้งทันที ทะลุโหมดประหยัดพลังงาน (Doze Mode) ของ Android
-  - แก้ไขบั๊กการคำนวณยอดเงินในหน้า "ประวัติการจัดก๊วน" และ "ดูรายงาน" ของผู้จัด โดยป้องกันการนำบิลค้างชำระ (Status = 1) มาบวกซ้ำกับบิลที่จ่ายแล้ว (Status = 2) เพื่อให้ยอดรวมถูกต้อง
-  - **[Completed]** แก้ไขโครงสร้างและ Logic ของตาราง `UserLogins` ฝั่ง Backend ที่ใช้เก็บ FCM Token โดยแยกออกมาเป็นตาราง `UserFcmTokens` รองรับ 1-to-N
-  - **[Completed]** ปรับปรุงหน้า "จัดการรายชื่อ (Roster)" ของผู้จัด ให้แสดงสถานะผู้เล่นที่ "Check-out (กลับบ้านแล้ว)" ได้อย่างชัดเจน พร้อมย้าย Logic ตรวจสอบเวลาไปยัง Backend
-  - **[Completed]** ปิดการทำงานของ Auto Backup ใน Android (`AndroidManifest.xml`) เพื่อแก้ปัญหา Token ล็อกอินเก่าค้างอยู่ในเครื่องหลังจากลบและติดตั้งแอปใหม่
-  - **[Completed]** ปรับปรุงหน้า UI การแจ้งเตือน (Notification) ให้แสดง Icon และสีที่แตกต่างกันตามประเภทของ Noti เพื่อความสวยงามและแยกแยะง่ายขึ้น
-  - **[Completed]** แก้ไขปัญหา Entity Framework (EF Core) ฝั่ง Backend แครชจากการดึงข้อมูล (Cartesian Explosion) ในหน้า Manage โดยดึงข้อมูลดิบลง Memory ก่อนทำ DTO Projection
-  - **[Completed]** แก้ไขบั๊กหน้า "การเงิน (Finance Dashboard)" ฝั่งแอปให้เข้ากันได้กับ `fl_chart` เวอร์ชันใหม่ และปรับปรุงตัวแปร State ป้องกันแอปแครชตอนเปิดดูกราฟ
-  - **[Completed]** ปรับปรุง UX หน้าชำระเงิน (QR Code และ Wallet) ให้เด้งเปลี่ยนหน้าอัตโนมัติ (Auto-redirect) เมื่อได้รับ Webhook สำเร็จ ไม่ต้องรอให้ผู้ใช้กดปุ่มยืนยันซ้ำซ้อน
-  - **[Completed]** ปรับปรุง Logic การคืนเงิน (Refund) เมื่อผู้เล่นกดยกเลิกก๊วนเอง ระบบจะหักค่าธรรมเนียมแพลตฟอร์ม (Service Fee) ออกก่อนคืนเงินเข้า Wallet ผู้เล่นให้ถูกต้องตามนโยบาย
-  - **[Completed]** ย้าย Logic การกรองวันที่ (Filter) ในหน้าการเงิน (Finance) จากหน้าบ้าน (Frontend) ไปจัดการที่หลังบ้าน (Backend) ผ่าน Entity Framework (Smart Backend)
-  - **[Completed]** เพิ่มการยิง SignalR `PlayerCheckedOut` จากฝั่งผู้จัดไปยังฝั่งผู้เล่นเมื่อรับเงินสดสำเร็จ เพื่อให้แอปผู้เล่นเตรียมพร้อมเด้งแจ้งเตือนและเปลี่ยนหน้าอัตโนมัติ
-  - **[Completed]** ปรับปรุง UX หน้าเช็คบิลผู้เล่น (ExpensePanel) ซิงค์ข้อมูลให้โหลดบิลและยอดรวมใหม่ทันทีเมื่อผู้จัดกดยกเลิกสแกน QR
-  - **[Completed]** เพิ่ม `WidgetsBindingObserver` ในหน้ากระดานผู้เล่น เพื่อบังคับให้แอปเชื่อมต่อ SignalR และโหลดข้อมูลใหม่ทันทีเมื่อผู้ใช้ปลุกแอปจากพื้นหลัง (Background/Sleep)
-  - **[Completed]** แก้ไขหน้า `ExpensePanel` ในหน้าควบคุมกระดาน (ManageGame) ให้ดึงข้อมูลบิลและยอดค้างชำระใหม่ทันทีเมื่อผู้จัดปิดหน้าต่าง QR Code
-  - **[Completed]** แก้ไขบั๊กยอดหนี้ซ้ำซ้อน บังคับยกเลิกบิลค้างชำระใบเก่า (Status = 3) เสมอเมื่อออกบิลใบใหม่ เพื่อไม่ให้หน้าประวัติผู้เล่นแสดงสถานะค้างชำระผิดพลาด
-  - **[Completed]** เพิ่ม `WidgetsBindingObserver` ในหน้ากระดานผู้จัด (`manage_game.dart`) เพื่อให้ SignalR ต่ออัตโนมัติและรีเฟรชข้อมูลป้องกัน State ค้าง (Stale Data)
-  - **[Completed]** แก้ไขปัญหากดปุ่มย้อนกลับ (Back) แล้วข้อมูลหน้าจอเป็นของเก่า โดยเพิ่มการดักคำสั่ง `.then(...)` เพื่อบังคับโหลดข้อมูลใหม่ให้เป็นปัจจุบัน 100%
-  - **[Completed]** ปรับปรุงสูตร `getResponsiveFontSize` แบบ Native โดยใช้ `.clamp(0.85, 1.3)` เพื่อแก้ปัญหาฟอนต์ใหญ่ล้นจอบน iPad และฟอนต์เล็กเกินไปบนหน้าจอมือถือ
-  - **[Completed]** อุดช่องโหว่ Race Condition ในระบบชำระเงิน QR Code ป้องกันผู้เล่นกดยกเลิกก๊วนในจังหวะเดียวกับที่ Webhook แจ้งว่าจ่ายสำเร็จ
-  - **[Completed]** ปรับปรุงนโยบายคืนเงิน (Refund Policy) คืนเงินเต็มจำนวนรวมค่าธรรมเนียมให้ผู้เล่นเมื่อยกเลิกก๊วน โดยแพลตฟอร์มจะเป็นผู้รับผิดชอบค่าธรรมเนียมแทนผู้จัด
-  - **[Completed]** แก้ไขบั๊กหน้า Login หมุนค้างเมื่อเข้าสู่ระบบสำเร็จ โดยปรับปรุงการส่ง FCM Token ให้ทำงานเบื้องหลัง (Fire-and-forget) ไม่บล็อก UI
-  - **[Completed]** ปรับปรุง UI กระดานผู้จัด (Manage Game) เพิ่มสัญลักษณ์ Walk-in และย่อขนาด Card อัตโนมัติเมื่อลากลงสนาม เพื่อป้องกันรูปภาพโดนบีบ
-  - **[Completed]** เพิ่ม `ReadOnlyCourtTimerWidget` ในแอปฝั่งผู้เล่น เพื่อให้เห็นเวลานับถอยหลังของแมตช์ที่กำลังเล่นอยู่แบบ Real-time
-  - **[Completed]** อุดช่องโหว่แพลตฟอร์มขาดทุน (Financial Leak) โดยเพิ่มระบบหักค่าธรรมเนียม 10 บาทเป็นยอดติดลบ (หนี้) ใน Wallet ของผู้จัดอัตโนมัติ เมื่อผู้จัดรับเงินสด/โอนตรง หรือลูกค้าสแกน QR เข้า Sub-account ของผู้จัด
-  - **[Completed]** ปรับปรุงระบบแจ้งเตือน (Push Notification) ให้เช็คสถานะจาก API ก่อนเปลี่ยนหน้า เพื่อป้องกันแอปเด้งไปหน้ากระดานที่ยังไม่เริ่มตอนกด Noti ขณะที่แอปปิดสนิท
-  - **[Completed]** เพิ่มการดักฟัง Event `PlayerCheckedOut` บนหน้ากระดานผู้เล่น เพื่อแสดง Pop-up แจ้งเตือนและเด้งกลับหน้าประวัติอัตโนมัติเมื่อผู้จัดกดยืนยันรับเงิน
-  - **[Technical Debt]** `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) มีการรวม Logic ของฝั่งผู้จัดและผู้เล่นไว้ด้วยกัน (เช่น `JoinSession`, `CancelBooking`) และอาจมี Logic ทับซ้อนกับ `MatchManagementService.cs` ตัดสินใจชะลอการ Refactor ไว้ก่อนเพื่อรักษาความเสถียร
-- **สิ่งที่ต้องทำต่อ:**
-  1. ทำระบบ Social Login (Google / Apple / LINE) ด้วยการ Verify Token ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
-  2. ทำระบบแชร์ก๊วน (Share / Deep Linking) เพื่อให้ผู้จัดส่งลิงก์ชวนเพื่อนทาง Social Media / LINE ได้
-  3. เตรียมความพร้อมแอปพลิเคชันก่อนขึ้น Store (App Icon, Splash Screen, Permissions)
-  4. Audit UX/UI และจัดการ Responsive Design (Font Size, Layout) ให้แสดงผลได้สวยงามสม่ำเสมอในทุกขนาดหน้าจอ (Mobile/Tablet)
-
-## 8. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
+## 7. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
 เพื่อรักษามาตรฐานสถาปัตยกรรมของโปรเจกต์ ให้ AI อ้างอิงการสร้างหรือแก้ไขไฟล์ตามโครงสร้างนี้:
 
-### 8.1 Backend (.NET 8 API) - Modular Architecture
+### 7.1 Backend (.NET 8 API) - Modular Architecture
 - `DropInBadAPI/Models/` -> เก็บ Entity Classes ทั้งหมด (Database Schema)
 - `DropInBadAPI/Data/` -> เก็บ `BadmintonDbContext.cs` (EF Core)
 - `DropInBadAPI/Modules/` -> เก็บ Logic แบ่งตาม Domain (Feature Folders):
@@ -587,7 +523,7 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - `/Shared/` -> DTOs กลางที่ใช้ร่วมกันหลาย Module
   - `/Webhooks/` -> ตัวรับข้อมูลจากภายนอก (Xendit)
 
-### 8.2 Frontend (Flutter) - Feature-based
+### 7.2 Frontend (Flutter) - Feature-based
 - `lib/component/` -> Reusable UI Widgets (ปุ่ม, การ์ด, Dialogs)
 - `lib/model/` -> Data Models / Classes
 - `lib/page/` -> หน้าจอแอปพลิเคชัน แบ่งตาม Role:
@@ -596,6 +532,44 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - `/user/` -> หน้าสำหรับผู้เล่น (ค้นหาก๊วน, จ่ายเงิน, กระเป๋าเงิน)
 - `lib/shared/` -> Core Logic, API Provider, State Management (Providers)
 - `lib/widget/` -> Custom Widgets เฉพาะทาง
+
+## 8. System Status & Completed Features (สถานะระบบปัจจุบัน)
+
+**[Authentication & Security]**
+- รองรับ Guest Mode (Apple Guideline) และ Token Refresh Locking แบบ Rolling
+- แยกตาราง `UserFcmTokens` รองรับ 1-to-N Devices
+- Fire-and-forget FCM Token Update ป้องกันหน้า Login หมุนค้าง
+- ปิด Auto Backup ใน Android ป้องกัน Token เก่าค้างเมื่อลงแอปใหม่
+
+**[Game & Live State (SignalR)]**
+- ระบบกระดาน Live State ลื่นไหลด้วย Optimistic UI ทั้งผู้เล่นและผู้จัด
+- จัดการเวลาแบบ Smart Backend (อิงเวลาเซิร์ฟเวอร์เพื่อความแม่นยำ)
+- UI รองรับการย่อ Card อัตโนมัติเมื่อลงสนาม และมีสัญลักษณ์ Walk-in ชัดเจน
+- มี `ReadOnlyCourtTimerWidget` ในแอปผู้เล่นเพื่อนับเวลาแบบ Real-time
+- `WidgetsBindingObserver` บังคับ SignalR ต่อใหม่เสมอเมื่อเปิดแอปจาก Background (ป้องกันข้อมูล Stale)
+
+**[Payment, Wallet & Xendit]**
+- เชื่อมต่อ Xendit Dynamic QR Code และ Sub-account แบบ E2E
+- ระบบชำระเงินด้วย Wallet และกลไก Negative Balance (ยอดหนี้สินผู้จัด)
+- **Race Condition Protection:** ป้องกันลูกค้ากดยกเลิกพร้อมจังหวะ Webhook เข้า
+- **Financial Leak Protection:** หักค่าธรรมเนียมผู้จัด 10 บาทเป็นหนี้เสมอเมื่อรับเงินสด/โอนตรง/สแกนเข้าบัญชีตัวเอง
+- นโยบายคืนเงิน: คืนเต็มจำนวน (รวม Service Fee) เมื่อยกเลิกก๊วน แพลตฟอร์มเป็นผู้รับผิดชอบค่าธรรมเนียม
+- UI อัปเดตยอดเงินทันทีที่ Webhook ทำงานสำเร็จ (Auto-redirect) โดยไม่ต้องกดยืนยัน
+- ผู้จัดกด Checkout เงินสดปุ๊บ ผู้เล่นถูกดึงออกจากบอร์ดกลับไปหน้าประวัติทันทีด้วย SignalR
+
+**[Push Notifications]**
+- แจ้งเตือนครบทุกเหตุการณ์: สร้างก๊วน, ยกเลิก, เริ่มเกม, จบเกม, เช็คอิน, จ่ายเงิน
+- ระบบแจ้งเตือนทะลุ Doze Mode (High Priority)
+- กด Noti เพื่อ Route ไปหน้าก๊วนถูกต้อง (มีการยิง API เช็คสถานะก่อนเปลี่ยนหน้า ป้องกันเด้งเข้าสนามที่ยังไม่เริ่ม)
+
+## 9. Technical Debt & Known Issues
+- `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) รวม Logic ผู้จัดและผู้เล่นไว้ด้วยกัน ควรพิจารณาแยกย่อยเป็น `BookingService` และ `BillingService` หลังระบบนิ่ง
+- Auto Match Scoring (การให้คะแนนจัดคู่อัตโนมัติ) อาจจะต้องเพิ่ม Weight Configuration ให้ผู้จัดปรับแต่งได้เองในอนาคตเพื่อความยืดหยุ่น
+
+## 10. Next Steps (Roadmap)
+1. **Social Login (Google / Apple):** ดำเนินการติดตั้งฝั่ง Frontend ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
+2. **Deep Linking (Share Link):** แชร์ก๊วนเป็น URL ให้ผู้เล่นกดแล้วเด้งเข้าแอปไปหน้าจองทันที (Growth Channel ที่สำคัญที่สุดก่อนเปิดตัว)
+3. **UI/UX Polish & Store Preparation:** App Icon, Splash Screen, Permissions
 
 <!-- ตัวอย่างการแจ้งแก้ UI ให้ผม
 เครื่องที่เทส: iPad Mini 5 (หรือ iPhone SE, Galaxy S23) หน้าจอ: จัดการก๊วน manage_game.dart ปัญหาที่เจอ: ในการ์ดสนามตรงปุ่ม Pause ไอคอนมันเล็กเกินไป และชื่อผู้เล่นในช่องมันยาวจนตกบรรทัดไปทับขอบการ์ด -->
