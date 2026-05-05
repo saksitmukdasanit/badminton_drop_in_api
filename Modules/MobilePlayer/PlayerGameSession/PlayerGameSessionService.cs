@@ -881,11 +881,22 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             });
         }
 
-        public async Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId)
+        public async Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId, bool isAbort = false)
         {
             var participant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
             if (participant == null || participant.Status == 3) return (false, "Booking not found.");
             
+            // --- NEW: ถ้าเป็นการกดยกเลิกอัตโนมัติจากการปิดหน้า QR (isAbort = true) ---
+            // ตรวจสอบชัวร์ๆ อีกรอบว่าระบบได้รับเงินและเปลี่ยนบิลเป็นสถานะ 2 แล้วหรือยัง
+            if (isAbort)
+            {
+                bool hasPaid = await _context.ParticipantBills.AnyAsync(b => b.SessionId == sessionId && b.UserId == userId && b.Status == 2);
+                if (hasPaid)
+                {
+                    return (false, "PAYMENT_COMPLETED"); // ส่งรหัสกลับไปให้ Frontend รู้ว่าจ่ายแล้ว ห้ามยกเลิก
+                }
+            }
+
             var session = await _context.GameSessions.FindAsync(sessionId);
             
             // --- NEW: ระบบคืนเงินเข้า Wallet อัตโนมัติ (กรณีผู้เล่นยกเลิกเอง คืนเต็มจำนวน) ---
@@ -898,8 +909,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                 foreach (var bill in paidBills)
                 {
-                    // คืนเงินเต็มจำนวนที่จ่ายมา
+                    // --- คืนเงินเต็มจำนวน (รวมค่าธรรมเนียม) ตามนโยบาย CEO ---
                     decimal refundAmount = bill.TotalAmount;
+                    var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                    decimal serviceFee = serviceFeeItem?.Amount ?? 0;
 
                     if (refundAmount > 0)
                     {
@@ -913,10 +926,9 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         wallet.Balance += refundAmount;
                         wallet.UpdatedDate = DateTime.UtcNow;
 
-                        // --- FIX: ดึงเงินกลับจาก Wallet ผู้จัด (ยอมให้ติดลบได้) ---
-                        var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
-                        decimal serviceFee = serviceFeeItem?.Amount ?? 0;
-                        decimal amountToDeductFromOrg = refundAmount - serviceFee; // ดึงกลับเฉพาะส่วนที่ผู้จัดได้ไป
+                        // --- ดึงเงินกลับจาก Wallet ผู้จัด (เฉพาะส่วนที่โอนให้ผู้จัดไป) ---
+                        // ยอดส่วนต่าง 10 บาท แพลตฟอร์มจะเป็นผู้รับผิดชอบ (ควักเนื้อจ่าย)
+                        decimal amountToDeductFromOrg = refundAmount - serviceFee; 
 
                         if (amountToDeductFromOrg > 0)
                         {
@@ -1317,6 +1329,24 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         else if (dto.PaymentMethod != "QR Code")
                         {
                             newBill.Payments.Add(new Payment { PaymentMethod = (byte)1, Amount = finalTotalAmount, PaymentDate = DateTime.UtcNow });
+
+                            // --- FIX: หักค่าธรรมเนียมแพลตฟอร์มจาก Wallet ผู้จัด (กรณีผู้เล่นจ่ายเงินสด) ---
+                            decimal serviceFeeDeduct = _configuration.GetValue<decimal>("ServiceFee");
+                            if (serviceFeeDeduct > 0)
+                            {
+                                var organizerWalletToDeduct = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == session.CreatedByUserId);
+                                if (organizerWalletToDeduct == null)
+                                {
+                                    organizerWalletToDeduct = new UserWallet { UserId = session.CreatedByUserId, Balance = 0 };
+                                    await _context.UserWallets.AddAsync(organizerWalletToDeduct);
+                                }
+                                organizerWalletToDeduct.Balance -= serviceFeeDeduct; // หักเงิน (อาจทำให้ยอดติดลบเป็นหนี้)
+                                organizerWalletToDeduct.UpdatedDate = DateTime.UtcNow;
+                                await _context.WalletTransactions.AddAsync(new WalletTransaction { 
+                                    Wallet = organizerWalletToDeduct, Amount = serviceFeeDeduct, TransactionType = 2, // 2 = OUT
+                                    Description = $"หักค่าธรรมเนียมแอป (รับเงินสด): {session.GroupName}", ReferenceId = session.SessionId 
+                                });
+                            }
                         }
                     }
 

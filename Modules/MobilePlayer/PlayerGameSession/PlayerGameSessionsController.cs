@@ -112,9 +112,9 @@ namespace DropInBadAPI.Controllers.MobilePlayer
         }
 
         [HttpDelete("{id}/cancel")]
-        public async Task<ActionResult<Response<object>>> CancelBooking(int id)
+        public async Task<ActionResult<Response<object>>> CancelBooking(int id, [FromQuery] bool isAbort = false)
         {
-            var (success, errorMessage) = await _playerSessionService.CancelBookingAsync(id, GetCurrentUserId());
+            var (success, errorMessage) = await _playerSessionService.CancelBookingAsync(id, GetCurrentUserId(), isAbort);
             if (!success) return BadRequest(new Response<object> { Status = 400, Message = errorMessage });
             return Ok(new Response<object> { Status = 200, Message = "Your booking has been cancelled." });
         }

@@ -468,6 +468,19 @@ namespace DropInBadAPI.Service.Mobile.Game
                 await using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
+                    // --- NEW: เปรียบเทียบข้อมูลเพื่อแจ้งเตือนว่าแก้อะไรไปบ้าง ---
+                    var changes = new List<string>();
+                    var thaiCulture = new CultureInfo("th-TH");
+                    if (sessionToUpdate.SessionDate != dto.SessionDate) changes.Add($"วันที่เป็น {dto.SessionDate.ToString("dd/MM/yyyy", thaiCulture)}");
+                    if (sessionToUpdate.StartTime != dto.StartTime || sessionToUpdate.EndTime != dto.EndTime) changes.Add($"เวลาเป็น {dto.StartTime:HH\\:mm}-{dto.EndTime:HH\\:mm} น.");
+                    if (sessionToUpdate.CourtFeePerPerson != dto.CourtFeePerPerson) changes.Add($"ค่าสนามเป็น {dto.CourtFeePerPerson} บ.");
+                    if (sessionToUpdate.ShuttlecockFeePerPerson != dto.ShuttlecockFeePerPerson) changes.Add($"ค่าลูกแบดเป็น {dto.ShuttlecockFeePerPerson} บ.");
+                    if (sessionToUpdate.MaxParticipants != dto.MaxParticipants) changes.Add($"จำนวนรับเป็น {dto.MaxParticipants} คน");
+
+                    string changeMessage = changes.Any() 
+                        ? $"ก๊วน '{sessionToUpdate.GroupName}' มีการแก้: " + string.Join(", ", changes)
+                        : $"ข้อมูลก๊วน '{sessionToUpdate.GroupName}' มีการอัปเดต กรุณาตรวจสอบรายละเอียด";
+
                     sessionToUpdate.GroupName = dto.GroupName;
                     sessionToUpdate.VenueId = venueId;
                     sessionToUpdate.SessionDate = dto.SessionDate;
@@ -533,7 +546,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                         await _notificationService.SendNotificationAsync(
                             userId,
                             "ข้อมูลก๊วนมีการเปลี่ยนแปลง",
-                            $"ข้อมูลก๊วน '{sessionToUpdate.GroupName}' มีการอัปเดต กรุณาตรวจสอบรายละเอียด",
+                            changeMessage,
                             "SESSION_UPDATED",
                             sessionId
                         );

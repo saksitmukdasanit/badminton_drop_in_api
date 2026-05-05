@@ -10,7 +10,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         Task<PlayerGameSessionViewDto?> GetSessionForPlayerViewAsync(int sessionId, int? currentUserId);
         Task<PlayerHistoryDetailDto?> GetHistoryDetailAsync(int sessionId, int userId);
         Task<(JoinSessionResponseDto? Data, string ErrorMessage)> JoinSessionAsync(int sessionId, int userId, PlayerJoinSessionRequestDto dto);
-        Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId);
+        Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId, bool isAbort = false);
         Task<(bool Success, string ErrorMessage)> PlayerCheckinAsync(int sessionId, int userId, string scannedQrCode);
         Task<PlayerBillPreviewDto?> GetMyBillPreviewAsync(int sessionId, int userId);
         Task<PlayerStatsDto?> GetMyStatsAsync(int sessionId, int userId);

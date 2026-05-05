@@ -582,6 +582,7 @@ namespace DropInBadAPI.Services
         {
             var bill = await _context.ParticipantBills
                 .Include(b => b.Session).ThenInclude(s => s.CreatedByUser).ThenInclude(u => u.OrganizerProfile)
+                .Include(b => b.BillLineItems)
                 .FirstOrDefaultAsync(b => b.BillId == billId);
 
             if (bill == null || bill.Session.CreatedByUserId != organizerUserId) return (false, "Bill not found", null);
@@ -612,6 +613,25 @@ namespace DropInBadAPI.Services
 
             // หมายเหตุ: ต้องแน่ใจว่า DbContext มี DbSet<Payment> Payments
             await _context.Payments.AddAsync(payment);
+
+            // --- FIX: หักค่าธรรมเนียมแพลตฟอร์มจาก Wallet ผู้จัด (กรณีผู้จัดกดยืนยันรับเงินสด/โอนตรง) ---
+            var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+            decimal serviceFeeDeduct = serviceFeeItem?.Amount ?? 0;
+            if (serviceFeeDeduct > 0)
+            {
+                var organizerWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == organizerUserId);
+                if (organizerWallet == null)
+                {
+                    organizerWallet = new UserWallet { UserId = organizerUserId, Balance = 0 };
+                    await _context.UserWallets.AddAsync(organizerWallet);
+                }
+                organizerWallet.Balance -= serviceFeeDeduct; // ยอมให้ยอดติดลบเป็นหนี้
+                organizerWallet.UpdatedDate = DateTime.UtcNow;
+                await _context.WalletTransactions.AddAsync(new WalletTransaction { 
+                    Wallet = organizerWallet, Amount = serviceFeeDeduct, TransactionType = 2, // 2 = OUT
+                    Description = $"หักค่าธรรมเนียมแอป (ผู้จัดรับชำระเอง): {bill.Session.GroupName}", ReferenceId = bill.SessionId 
+                });
+            }
 
             await _context.SaveChangesAsync();
 
@@ -1468,6 +1488,7 @@ namespace DropInBadAPI.Services
 
             var bill = await _context.ParticipantBills
                 .Include(b => b.Session)
+                .Include(b => b.BillLineItems)
                 .FirstOrDefaultAsync(b => b.BillId == billId);
 
             // ถ้าไม่มีบิล หรือจ่ายแล้ว ไม่ต้องทำอะไรซ้ำซ้อน
@@ -1485,6 +1506,26 @@ namespace DropInBadAPI.Services
             };
 
             await _context.Payments.AddAsync(payment);
+
+            // --- FIX: หักค่าธรรมเนียมแพลตฟอร์มจาก Wallet ผู้จัด (กรณีลูกค้าสแกน QR เข้า Sub-Account สำเร็จ) ---
+            var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+            decimal serviceFeeDeduct = serviceFeeItem?.Amount ?? 0;
+            if (serviceFeeDeduct > 0)
+            {
+                var organizerWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == bill.Session.CreatedByUserId);
+                if (organizerWallet == null)
+                {
+                    organizerWallet = new UserWallet { UserId = bill.Session.CreatedByUserId, Balance = 0 };
+                    await _context.UserWallets.AddAsync(organizerWallet);
+                }
+                organizerWallet.Balance -= serviceFeeDeduct; // ยอมให้ยอดติดลบเป็นหนี้
+                organizerWallet.UpdatedDate = DateTime.UtcNow;
+                await _context.WalletTransactions.AddAsync(new WalletTransaction { 
+                    Wallet = organizerWallet, Amount = serviceFeeDeduct, TransactionType = 2, // 2 = OUT
+                    Description = $"หักค่าธรรมเนียมแอป (รับเงินผ่าน QR): {bill.Session.GroupName}", ReferenceId = bill.SessionId 
+                });
+            }
+
             await _context.SaveChangesAsync();
 
             // 2. ส่ง SignalR กลับไปหาผู้เล่น ให้แอปปิดหน้าต่าง QR Code ทันที
