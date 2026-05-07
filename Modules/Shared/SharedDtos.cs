@@ -2,6 +2,7 @@ namespace DropInBadAPI.Dtos
 {
     public record UpcomingSessionCardDto
     {
+        public Guid SessionPublicId { get; init; }
         public int SessionId { get; init; }
         public string GroupName { get; init; } = string.Empty; // << เพิ่มกลับเข้ามา
         public string? ImageUrl { get; init; }
@@ -12,6 +13,8 @@ namespace DropInBadAPI.Dtos
         public DateTime SessionStart { get; init; } // << เพิ่มกลับเข้ามา (DateTime เต็ม)
         public string CourtName { get; init; } = string.Empty; // เปลี่ยนจาก VenueName เป็น CourtName ตามที่คุณขอ
         public string? Location { get; init; }
+        public decimal? Latitude { get; init; }
+        public decimal? Longitude { get; init; }
         public string? Price { get; init; }
         public string? CourtFeePerPerson { get; init; }
         public string? ShuttlecockFeePerPerson { get; init; }

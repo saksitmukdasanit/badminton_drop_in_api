@@ -49,13 +49,6 @@ namespace DropInBadAPI.Services
                 return (false, "กรุณาตั้งค่าบัญชีธนาคารในเมนู 'บัญชีรับเงิน' ให้เรียบร้อยก่อนทำการถอนเงิน");
             }
 
-            // 2. ตรวจสอบยอดเงินในกระเป๋า
-            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
-            if (wallet == null || wallet.Balance < amount)
-            {
-                return (false, "ยอดเงินในกระเป๋าไม่เพียงพอ");
-            }
-
             string bankName = "ธนาคาร";
             string bankCode = "";
             var bank = await _context.Banks.FindAsync(profile.BankId);
@@ -67,8 +60,21 @@ namespace DropInBadAPI.Services
 
             if (string.IsNullOrEmpty(bankCode)) return (false, "ข้อมูลธนาคารไม่สมบูรณ์ (ไม่พบ Bank Code) ไม่สามารถโอนเงินได้");
 
-            // --- NEW: ยิง API สั่งให้ Xendit โอนเงินเข้าบัญชี (Payout) ---
-            string accountName = profile.BankAccountName;
+            // 2. CONCURRENCY: ตัดยอดแบบ atomic ผ่าน UPDATE...WHERE Balance >= amount
+            //    กัน double-spend จาก request พร้อมกัน — ไม่ต้องล็อก transaction ยาวระหว่างเรียก Xendit
+            var rowsAffected = await _context.UserWallets
+                .Where(w => w.UserId == userId && w.Balance >= amount)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(w => w.Balance, w => w.Balance - amount)
+                    .SetProperty(w => w.UpdatedDate, DateTime.UtcNow));
+
+            if (rowsAffected == 0)
+            {
+                return (false, "ยอดเงินในกระเป๋าไม่เพียงพอ");
+            }
+
+            // 3. เรียก Xendit หลังจากตัดยอดแล้ว — ถ้าล้มต้องคืนยอด (compensating transaction)
+            string accountName = profile.BankAccountName ?? "";
             if (string.IsNullOrWhiteSpace(accountName)) accountName = $"{profile.FirstName} {profile.LastName}";
             if (string.IsNullOrWhiteSpace(accountName)) accountName = profile.Nickname ?? "DropInBad Player";
 
@@ -77,23 +83,33 @@ namespace DropInBadAPI.Services
                 refId, amount, bankCode, accountName, profile.BankAccountNumber, $"ถอนเงิน Wallet: {profile.Nickname}"
             );
 
-            if (!payoutSuccess) return (false, $"การโอนเงินขัดข้อง: {payoutMessage}");
-
-            // 3. หักยอดเงินและบันทึกประวัติ (หักหลังจากที่ Xendit รับคำสั่งสำเร็จเท่านั้น)
-            wallet.Balance -= amount;
-            wallet.UpdatedDate = DateTime.UtcNow;
-
-            var transaction = new WalletTransaction
+            if (!payoutSuccess)
             {
-                Wallet = wallet,
-                Amount = amount,
-                TransactionType = 2, // 2 = OUT (Withdraw)
-                Description = $"ถอนเงินเข้าบัญชี {bankName} ({profile.BankAccountNumber}) [Ref: {payoutId}]",
-                CreatedDate = DateTime.UtcNow
-            };
+                // คืนยอดกลับเข้า wallet
+                await _context.UserWallets
+                    .Where(w => w.UserId == userId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(w => w.Balance, w => w.Balance + amount)
+                        .SetProperty(w => w.UpdatedDate, DateTime.UtcNow));
 
-            await _context.WalletTransactions.AddAsync(transaction);
-            await _context.SaveChangesAsync();
+                return (false, $"การโอนเงินขัดข้อง: {payoutMessage}");
+            }
+
+            // 4. บันทึกประวัติ
+            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
+            if (wallet != null)
+            {
+                var transaction = new WalletTransaction
+                {
+                    WalletId = wallet.WalletId,
+                    Amount = amount,
+                    TransactionType = 2, // 2 = OUT (Withdraw)
+                    Description = $"ถอนเงินเข้าบัญชี {bankName} ({profile.BankAccountNumber}) [Ref: {payoutId}]",
+                    CreatedDate = DateTime.UtcNow
+                };
+                await _context.WalletTransactions.AddAsync(transaction);
+                await _context.SaveChangesAsync();
+            }
 
             return (true, "ทำรายการถอนเงินสำเร็จ ระบบกำลังดำเนินการโอนยอดเข้าบัญชีของคุณ");
         }

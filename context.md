@@ -63,6 +63,7 @@
 - **Events ที่แจ้งเตือนผู้จัด:** มีผู้เล่นจองก๊วน/สำรอง, มีผู้เล่นยกเลิก, ได้รับชำระเงิน, ผู้เล่นเช็คอิน (สแกน QR)
 
 ### 3.5 Auto Match (การจัดคู่อัตโนมัติ)
+- **Service:** `IAutoMatchService` (แยกออกจาก `GameSessionService`) ครอบ 4 use case คือ `AutoMatchAsync`, `SwapPlayersAsync`, `AssignReserveToCourtAsync`, `MovePlayersAsync` พร้อม `BroadcastLiveStateChange` (SignalR push)
 - **เงื่อนไขคัดกรองผู้เล่น:** ต้องเช็คอินแล้ว, ยังไม่เช็คเอาท์ (จ่ายเงินออกไป), ไม่อยู่ในสนาม (กำลังเล่น/เตรียมลง), และไม่ถูกผู้จัดระงับ (Pause/End Game)
 - **ระบบการให้คะแนน (Scoring System):** คัดเลือกผู้เล่นโดยรวมคะแนนจาก 3 ส่วนคือ
   1. **Queue Score:** ลำดับคิว (รอนานสุด/เกมน้อยสุด จะได้คะแนนดีสุด)
@@ -73,6 +74,7 @@
   - **โหมดจัดตามมือ (Skill Mode):** หาระดับมือที่ใกล้เคียงกับแกนหลักมากที่สุด
 - **การจัดทีมภายใน (Team Balancing):** นำ 4 คนที่เลือกมาจัดทีม A vs B โดยคำนวณจากรูปแบบที่เป็นไปได้ทั้งหมด เพื่อให้ได้ทีมที่ผลรวมฝีมือสูสีกันที่สุด และหลีกเลี่ยงการจับคู่หรือเจอคู่แข่งที่ซ้ำกับแมตช์ก่อนหน้า
 - **ผลลัพธ์:** สร้างเป็นรายการเตรียมลงสนาม (`Staged Match` Status = 4) นำไปลงในคอร์ทที่ว่าง หรือสร้างเป็น "ทีมสำรอง" (-1, -2) กรณีที่คอร์ทเต็ม
+- **Per-Organizer Preset (`OrganizerAutoMatchPresets`):** น้ำหนัก 7 ค่าของ Auto Match (Queue / History / Mixed-Opp / Mixed-TM / Same-Level / Team-TM / Team-Opp) เก็บแยกตามผู้จัดบน server ผ่าน `IAutoMatchPresetService` (endpoint `GET/PUT/DELETE /api/organizer/auto-match-preset`); ฝั่งแอปดึง preset เข้ามาเป็นค่าตั้งต้น แล้วเก็บ cache ลง `SharedPreferences` กัน UI กระตุก/รองรับ offline
 
 ### 3.6 Skill Level Management (การจัดการระดับมือ)
 - **Default Levels:** หากผู้จัดสมัครใหม่ ระบบจะสร้าง 4 ระดับให้เป็นค่าเริ่มต้นอัตโนมัติ (มือใหม่, มือเบา, มือกลาง, มือหนัก)
@@ -80,7 +82,21 @@
 - **Global Tracking:** ระดับมือของผู้เล่นจะผูกติดกับผู้จัดแต่ละคน (`UserOrganizerSkills`) เมื่อผู้เล่นจองก๊วนใหม่กับผู้จัดเดิม ระบบจะดึงระดับมือล่าสุดมาแสดงให้อัตโนมัติ
 
 ### 3.7 Authentication & Routing (การยืนยันตัวตนและการนำทาง)
-- **Apple App Store Guideline Compliance:** อนุญาตให้ผู้ใช้ทั่วไป (Guest) สามารถเข้าดูหน้า Home และหน้ารายละเอียดก๊วนได้โดยไม่ต้อง Login จะถูกบังคับ Login ก็ต่อเมื่อกระทำการสำคัญ (เช่น จองก๊วน, ชำระเงิน)
+- **Apple App Store Guideline Compliance:** อนุญาตให้ผู้ใช้ทั่วไป (Guest) สามารถเข้าดูหน้า Home และหน้ารายละเอียดก๊วนได้โดยไม่ต้อง Login จะถูกบังคับ Login ก็ต่อเมื่อกระทำการสำคัญ (เช่น จองก๊วน, ชำระเงิน). หน้า `/privacy-policy`, `/terms`, `/about` เป็น public pages เพื่อให้ผู้ใช้อ่านได้ก่อน sign up
+- **Account Deletion (Apple 5.1.1(v)):** Soft-delete + 30-day grace period — `User.DeletedAt` (timestamp), `IsActive=false`, invalidate refresh tokens. ปฏิเสธการลบหากยังมี Wallet balance / active session / upcoming joined session. SQL: `Sql/2026_05_06_AddUserDeletedAt.sql`. Endpoints: `POST /api/auth/request-deletion`, `POST /api/auth/cancel-deletion`. Frontend: `profile_user.dart` แสดง confirm dialog → call API → logout
+- **Report User + Block User (Apple 1.2 / 5.1.1(viii)):** ตาราง `UserReports` (reasons: spam/harassment/fraud/fake_profile/inappropriate_content/other) + `UserBlocks` (UNIQUE blocker+blocked, no self-block). SQL: `Sql/2026_05_06_AddUserReportsAndBlocks.sql`. Module: `Modules/UserSafety/`. Endpoints: `/api/user-safety/{report,block,blocks}` — ปุ่ม "More" (PopupMenu) ใน `UserProfileDialog` มีตัวเลือก "รายงาน" + "บล็อก"
+- **Privacy Policy / Terms of Service / About:** หน้า `/privacy-policy`, `/terms`, `/about` ใน `lib/page/legal/legal_pages.dart` (เนื้อหาเป็น **TEMPLATE** ที่ต้องตรวจกับ legal team ก่อนปล่อย Store). ลิงก์ถูกฝังใน checkbox "ยอมรับข้อกำหนด" ของ `personal_info_screen.dart` + เมนู profile ของ player/organizer
+- **App Tracking Transparency (iOS 14.5+):** `NSUserTrackingUsageDescription` ใส่ใน `Info.plist` แล้ว (scaffold เผื่ออนาคต). ปัจจุบันแอปไม่มี cross-app tracking SDK จึงยังไม่ trigger ATT prompt — เปิดใช้เมื่อมี ad SDK / Firebase Analytics ที่เปิด Personalized Ads
+- **Password Hashing:** ใช้ BCrypt (`BCrypt.Net-Next`) ผ่าน `IPasswordHasher` (work factor 11) พร้อม **lazy upgrade** — ถ้าตรวจเจอ legacy hash รูปแบบ `hashed_<password>` ใน DB จะยอมเทียบแบบเดิมเพื่อให้ผู้ใช้เก่า login ผ่าน แล้วทับด้วย BCrypt อัตโนมัติทันที (ไม่ต้องบังคับ reset password ทุกคน)
+- **Social Login (Phase 1 — Google + Apple):**
+  - DB schema เดิม `UserLogins.ProviderName/ProviderKey` รองรับ multi-provider อยู่แล้ว (Local / Google / Apple / SMSMKT)
+  - Backend: `IGoogleTokenVerifier` (verify ผ่าน `Google.Apis.Auth`) + `IAppleTokenVerifier` (verify JWT กับ Apple JWKS endpoint, validate `iss=https://appleid.apple.com` + `aud=BundleId/ServiceId`); `AuthService.LoginWithGoogleAsync` / `LoginWithAppleAsync` — ถ้าเจอ ProviderKey เดิม → ออก token; ถ้าไม่เจอ → สร้าง User+Profile+UserLogin ใหม่และ flag `RequiresPhoneVerification=true`
+  - **ไม่ auto-link ด้วย email** เพราะ DB เดิมไม่ verify email — ผู้ใช้ที่อยากผูก social กับบัญชีเก่าจะทำใน Settings → Linked Accounts (Phase 2 ในอนาคต)
+  - `POST /api/auth/login-google` + `POST /api/auth/login-apple` (anonymous) คืน `SocialLoginResponseDto { accessToken, refreshToken, requiresPhoneVerification, phoneNumber }`
+  - `POST /api/auth/link-phone` (authorized) — สำหรับ user ที่ login ผ่าน social ครั้งแรก: บันทึกเบอร์ลง UserProfile + ส่ง OTP ผ่าน SMSMKT
+  - Frontend: `lib/shared/social_login_service.dart` ห่อ `google_sign_in: ^7.2.0` + `sign_in_with_apple: ^7.0.1`; `login_screen.dart` ปุ่ม Google + Apple (Facebook ลบไปก่อน Phase 3); หน้าใหม่ `/social-phone-link` (`SocialPhoneLinkScreen`) สำหรับ flow first-time signup
+  - Setup keys: `docs/SOCIAL_LOGIN_SETUP.md`
+- **Login Race Fix:** `AuthProvider.login()` เขียน `accessToken`/`refreshToken` ลง `SharedPreferences` ให้เสร็จก่อน `notifyListeners()` และ `LoginScreen` `await login()` ก่อน `context.go('/')` กันอาการ "ติดตั้งใหม่ login แล้วข้อมูลไม่ขึ้น" (Dio interceptor อ่าน token ทัน)
 - **Token Refresh Locking:** มีกลไก Lock ใน `ApiProvider` เพื่อป้องกันการยิง API Refresh Token ซ้ำซ้อนพร้อมกันหลายเส้นเมื่อ Token หมดอายุ (แก้ปัญหาแอปแครชและเซิร์ฟเวอร์ทำงานหนัก)
 - **Rolling Refresh Token:** ทุกครั้งที่มีการ Refresh Token ฝั่ง Backend จะยืดอายุ Refresh Token ออกไปอีก 90 วัน เพื่อทำระบบ "Keep Me Logged In" อย่างสมบูรณ์แบบ
 
@@ -437,9 +453,24 @@ Table "UserFcmTokens" {
   }
 }
 
+// Per-organizer preset สำหรับ Auto Match scoring (ยกจาก SharedPreferences เป็น server-side, sync ข้ามเครื่อง)
+Table "OrganizerAutoMatchPresets" {
+  "UserID" int [pk, note: 'PK = UserID ของผู้จัด (1-to-1)']
+  "QueuePositionMultiplier" int [not null, default: 10]
+  "MatchTogetherPenaltyPerOccurrence" int [not null, default: 40]
+  "MixedModeOppositeSkillMultiplier" int [not null, default: 15]
+  "MixedModeTeammateSkillMultiplier" int [not null, default: 20]
+  "SameLevelSkillMultiplier" int [not null, default: 30]
+  "TeamFormationTeammateHistoryMultiplier" int [not null, default: 2]
+  "TeamFormationOpponentHistoryMultiplier" int [not null, default: 1]
+  "CreatedDate" timestamp [not null, default: `now()`]
+  "UpdatedDate" timestamp
+}
+
 // เพิ่มในส่วน Relationships
 Ref: "Users"."UserID" < "UserFollows"."FollowerId"
 Ref: "Users"."UserID" < "UserFollows"."OrganizerId"
+Ref: "Users"."UserID" - "OrganizerAutoMatchPresets"."UserID"
 
 
 
@@ -551,11 +582,26 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 **[Payment, Wallet & Xendit]**
 - เชื่อมต่อ Xendit Dynamic QR Code และ Sub-account แบบ E2E
 - ระบบชำระเงินด้วย Wallet และกลไก Negative Balance (ยอดหนี้สินผู้จัด)
-- **Race Condition Protection:** ป้องกันลูกค้ากดยกเลิกพร้อมจังหวะ Webhook เข้า
+- **Race Condition Protection:** ป้องกันลูกค้ากดยกเลิกพร้อมจังหวะ Webhook เข้า; `WalletService.WithdrawAsync` ใช้ atomic `ExecuteUpdate WHERE Balance >= amount` + compensating transaction (คืนยอด) เมื่อ Xendit Payout ล้มเหลว — ไม่ต้องล็อก transaction ยาวระหว่างเรียก external API
 - **Financial Leak Protection:** หักค่าธรรมเนียมผู้จัด 10 บาทเป็นหนี้เสมอเมื่อรับเงินสด/โอนตรง/สแกนเข้าบัญชีตัวเอง
+- **Refund Calculation Fix:** `CancelSessionByOrganizerAsync` Include `BillLineItems` ครบ ให้แยก service fee จาก court+shuttle fee ตอนคำนวณยอดดึงคืนจาก Wallet ผู้จัด (เดิมไม่ Include → service fee = 0 → ดึงคืนเกินจริง)
+- **Webhook Hardening:** `XenditWebhookController` reject ทุก request ทันทีเมื่อ `Xendit:WebhookVerificationToken` ใน config ว่าง (กัน production deploy ลืมตั้งค่า → spoof endpoint)
 - นโยบายคืนเงิน: คืนเต็มจำนวน (รวม Service Fee) เมื่อยกเลิกก๊วน แพลตฟอร์มเป็นผู้รับผิดชอบค่าธรรมเนียม
 - UI อัปเดตยอดเงินทันทีที่ Webhook ทำงานสำเร็จ (Auto-redirect) โดยไม่ต้องกดยืนยัน
 - ผู้จัดกด Checkout เงินสดปุ๊บ ผู้เล่นถูกดึงออกจากบอร์ดกลับไปหน้าประวัติทันทีด้วย SignalR
+
+**[Booking & Concurrency]**
+- `PromoteWaitlistedParticipantAsync` ห่อด้วย `Serializable` transaction + re-check capacity → กัน 2 คำขอ promote พร้อมกันเลื่อนคนเกิน `MaxParticipants`; ส่ง notification หลัง commit ป้องกันแจ้งผิดเมื่อ rollback
+- `ParticipantDtoMapper` มี fallback `?.LevelName ?? "ยังไม่กำหนด"` + สี `#9E9E9E` กัน NPE ตอนเจอ skill level ที่ถูก soft-delete
+
+**[Responsive UI / UX]**
+- `manage_game.dart` ใช้ `LayoutBuilder` แบ่ง 2 คอลัมน์เมื่อกว้าง ≥ 900px (สนาม | คิวผู้เล่น) — ผู้จัดบนแท็บเล็บใช้พื้นที่จอเต็มประสิทธิภาพ
+- ปุ่ม play/pause กลางสนาม tap target ≥ 48×48 ตาม Material guideline
+- `AutoMatchSettingsSheet` constrain `maxWidth: 600` กัน sheet แผ่เต็มจอบนแท็บเล็บ
+- หน้า auth (welcome / login / register / personal_info / otp) + home (player/organizer) ผ่าน `getResponsiveFontSize` ทั้งหมด — ขจัด fontSize hardcoded ที่ใหญ่เกินบนแท็บเล็บ
+- Skeleton loaders (`HomeDashboardSkeleton`) ใน home; `SessionCardListSkeleton` / `WalletPageSkeleton` / `MyGamesPageSkeleton` ในหน้า หาก๊วน (`search_user`), ประวัติ (`history_user`), เกมของฉัน (`mygame_user`), กระเป๋าเงิน (`my_wallet_page`) — ลด perceived loading time
+- `appRouteObserver` (global `RouteObserver`) ลงทะเบียนกับ `GoRouter`; home pages mixin `RouteAware` + `WidgetsBindingObserver` → refresh ตอน app resume + ตอน popNext กลับมาจากหน้าอื่น
+- `CustomElevatedButton` semantics ของ `enabled` ถูกแก้ให้ตรง convention (`enabled=true` = กดได้) + default `enabled = true` (เดิมกลับด้าน → caller บางที่ทำงานด้วย bug บังเอิญ)
 
 **[Push Notifications]**
 - แจ้งเตือนครบทุกเหตุการณ์: สร้างก๊วน, ยกเลิก, เริ่มเกม, จบเกม, เช็คอิน, จ่ายเงิน
@@ -563,13 +609,56 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - กด Noti เพื่อ Route ไปหน้าก๊วนถูกต้อง (มีการยิง API เช็คสถานะก่อนเปลี่ยนหน้า ป้องกันเด้งเข้าสนามที่ยังไม่เริ่ม)
 
 ## 9. Technical Debt & Known Issues
-- `GameSessionService.cs` เป็น God Object (~2,400 บรรทัด) รวม Logic ผู้จัดและผู้เล่นไว้ด้วยกัน ควรพิจารณาแยกย่อยเป็น `BookingService` และ `BillingService` หลังระบบนิ่ง
-- Auto Match Scoring (การให้คะแนนจัดคู่อัตโนมัติ) อาจจะต้องเพิ่ม Weight Configuration ให้ผู้จัดปรับแต่งได้เองในอนาคตเพื่อความยืดหยุ่น
+- ~~`GameSessionService.cs` เป็น God Object (~2,400 บรรทัด)~~ → **แยกครบแล้ว** เป็น `GameSessionBookingService` (เพิ่ม Walk-in / ลบ / เลื่อนคิว), `GameSessionBillingService` (สรุปการเงิน), `IAutoMatchService` (AutoMatch + Swap + AssignReserve + MovePlayers + BroadcastLiveStateChange) และ `ParticipantDtoMapper` (รวม mapping ของ Member/Guest); `GameSessionService` ลดเหลือ ~1,100 บรรทัดและทำหน้าที่เป็น façade ผ่าน `IGameSessionService` (controller ไม่ต้องแก้)
+- ~~Auto Match Scoring + Weight Preset~~ → **ครบทั้ง stack** (server-side preset):
+  - **Backend:** `AutoMatchScoringWeightsDto` (optional ใน `AutoMatchRequestDto.ScoringWeights`) + `OrganizerAutoMatchPresets` table + `IAutoMatchPresetService` + endpoint `GET/PUT/DELETE /api/organizer/auto-match-preset`. ทุกค่า clamp ≥ 0 และ default = ค่าเดิม (backward-compatible)
+  - **Frontend (Flutter):** `lib/model/auto_match_scoring_weights.dart` (model + 3 presets: เน้นคิว / ไม่ซ้ำหน้า / ฝีมือสูสี + `loadFromServer/saveToServer/resetOnServer`) + `lib/component/auto_match_settings_sheet.dart` (bottom-sheet ปรับ slider 7 ค่า, constrain maxWidth 600). เปิดผ่านปุ่มเฟือง (`Icons.tune`) ใน `manage_game.dart`; โหลดจาก server แล้ว cache ลง `SharedPreferences` กัน UI กระตุก/รองรับ offline; ส่ง `scoringWeights` ใน body ของ `/auto-match` เฉพาะตอนผู้จัดปรับเอง (default → ไม่แนบ → backward-compatible)
+  - **Migration:** `DropInBadAPI/Sql/2026_05_06_AddOrganizerAutoMatchPresets.sql` — รันก่อน deploy production
+- ~~`ParticipantDtoMapper` NPE risk~~ → **ปลอดภัยแล้ว** ใช้ `?.LevelName ?? "ยังไม่กำหนด"` + fallback color `#9E9E9E`
+- ~~Login race (ติดตั้งใหม่ → login → ข้อมูลไม่ขึ้น)~~ → **แก้แล้ว** เขียน prefs ก่อน notify + await login() ก่อน navigate
+- ~~Refund leak ใน CancelSessionByOrganizerAsync~~ → **แก้แล้ว** ThenInclude `BillLineItems`
+- ~~Password placeholder hash (`hashed_xxx`)~~ → **แก้แล้ว** ใช้ BCrypt + lazy upgrade
+- ~~Xendit webhook ยอม pass ตอน config ว่าง~~ → **แก้แล้ว** reject ทันที
+- ~~`personal_info_screen` ปุ่ม enabled สลับ + `CustomElevatedButton` semantics กลับด้าน~~ → **แก้แล้ว** ทั้งสองที่
+- ~~Promote-waitlist ไม่มี transaction~~ → **แก้แล้ว** Serializable TX + re-check capacity
+- ~~`participantType` literals~~ → **เรียบร้อย** ใช้ `ParticipantTypes.Member` / `Guest` และ helper `ParticipantTypes.IsMember` / `IsGuest` / `IsMemberOrGuest` ใน controller + billing + participant flows; payload JSON ถึงผู้เล่นยังเป็น `"Member"` / `"Guest"` เหมือนเดิม
+- ~~`withOpacity` deprecated warning กระจายในหลายไฟล์ Flutter~~ → **กวาดครบใน `lib/`** แทนด้วย `Color.withValues(alpha:)` แล้ว
+- ~~`MatchManagementService` nullable / โครงสร้าง~~ → **partial ครบ + กวาด nullable ในโฟลเดอร์นั้นแล้ว**; **backend `dotnet build` 0 warnings** (DTO หลักใช้ `#nullable disable warnings` เฉพาะไฟล์เพื่อตัด noise CS8618 โดยยังเก็บ `string?` ใน contract ได้)
 
 ## 10. Next Steps (Roadmap)
-1. **Social Login (Google / Apple):** ดำเนินการติดตั้งฝั่ง Frontend ควบคู่กับการยืนยันเบอร์โทรศัพท์ (OTP)
-2. **Deep Linking (Share Link):** แชร์ก๊วนเป็น URL ให้ผู้เล่นกดแล้วเด้งเข้าแอปไปหน้าจองทันที (Growth Channel ที่สำคัญที่สุดก่อนเปิดตัว)
-3. **UI/UX Polish & Store Preparation:** App Icon, Splash Screen, Permissions
+> หมายเหตุ: DB migration ทั้ง 3 ไฟล์ + `Xendit:WebhookVerificationToken` — **ทีมตั้งค่าใน environment แล้ว** (deploy ยังต้อง verify smoke test ตามรายการด้านล่าง)  
+> **เพิ่ม:** รัน `Sql/2026_05_06_AddOrganizerRecurringGameTemplates.sql` สำหรับก๊วนประจำสัปดาห์ (ข้อ 7)
+
+1. **Deploy & Migration Validation:**
+   - ~~Apply SQL migration บน DB production (`OrganizerAutoMatchPresets`)~~ + `UserDeletedAt` + reports/blocks — **รันแล้วใน env ที่ใช้**
+   - ~~ตั้ง `Xendit:WebhookVerificationToken` (กัน webhook spoof)~~ — **ตั้งแล้ว**
+   - ทดสอบ flow login user เก่า → BCrypt lazy upgrade ทำงานถูก (smoke test ก่อน release)
+2. **Social Login Phase 1 — ใส่ keys**: ดู `docs/SOCIAL_LOGIN_SETUP.md`
+   - ✅ **Google:** `Auth:Google:{IosClientId, AndroidClientId, WebClientId}` + Flutter `googleServerClientId` / `googleIosClientId`; Android SHA-1 + `google-services.json` — **ทำแล้ว**
+   - ⏳ **Apple:** ต้อง Apple Developer Program (จ่ายรายปี); จากนั้นตั้ง `Auth:Apple:*`, capability Xcode, และ (iOS) URL scheme Google ตามเอกสาร
+3. ~~**Tier 1 — App Store Compliance**~~ ✅ **เสร็จแล้ว** (ทำในรอบนี้):
+   - ✅ Account Deletion API จริง (Apple 5.1.1(v)) — `User.DeletedAt` + soft-delete + 30-day grace
+   - ✅ Privacy Policy + Terms + About pages (เนื้อหาเป็น template ต้องอัปเดตจริงก่อนปล่อย Store)
+   - ✅ Report User + Block User (Apple 1.2 / 5.1.1(viii)) — UserReports + UserBlocks tables + UserSafety module
+   - ✅ ATT scaffold — `NSUserTrackingUsageDescription` ใน Info.plist
+   - ✅ OTP copy fix — `otp_verification_screen.dart` ใช้ภาษาไทยและแสดงเบอร์ที่ mask แล้ว
+   - ✅ Filter bug fix — `search_user.dart` ส่ง `daysOfWeek` ไป backend (facilities/brand/walkin รอ backend support)
+4. **Social Login Phase 2 — Line + Account Linking:**
+   - เพิ่ม `flutter_line_sdk` + `LineTokenVerifier` (verify โดยเรียก `https://api.line.me/v2/profile`)
+   - หน้า Settings → Linked Accounts (ผูก/ถอน social provider จากบัญชี Local เดิมได้)
+5. **Reviews & Ratings** ผู้จัด↔ผู้เล่นหลังจบก๊วน (สร้าง trust, ให้ผู้จัดดีขึ้นบนสุดในระบบค้นหา)
+6. ~~**Deep Linking (Share Link)**~~ ✅ **MVP:**
+   - **Backend:** `GET /api/player/gamesessions/share/{sessionPublicId}` `[AllowAnonymous]` → `UpcomingSessionCardDto`; ฟิลด์ `sessionPublicId` บนการ์ด + `ManageGameSessionDto` / `EditGameSessionDto`
+   - **Flutter:** scheme `dropinbad://session/{guid}` (Android intent-filter + iOS `CFBundleURLTypes`), `app_links`, เส้นทาง `/share-session/:publicId` →โหลด API → `/booking-confirm`; ผู้จัดแชร์จากหน้าจัดการก๊วน (ปุ่มแชร์)
+   - **ถัดไป:** Universal Links (`https://…`) + AASA / Digital Asset Links เมื่อมีโดเมนจริง
+7. ~~**Recurring Session Template**~~ ✅ **เสร็จแล้ว** — **Backend:** ตาราง `OrganizerRecurringGameTemplates` + CRUD `/api/organizer/recurring-templates` + PATCH `active`; `RecurringSessionGenerationHostedService` สร้างก๊วนล่วงหน้า ~14 วันทุก 6 ชม. และหลังบันทึก template (reuse `CreateSessionAsync`); **Flutter:** ปุ่ม «ก๊วนประจำสัปดาห์» (`/recurring-templates`, form), mask วัน Mon=บิต0…Sun=บิต6
+8. ~~**Map view ใน search**~~ ✅ **เสร็จแล้ว** — Backend ส่ง `latitude`/`longitude` จาก `Venues`; Flutter แท็บรายการ/แผนที่ (`search_sessions_map.dart`)
+9. ~~**Backend hygiene (MatchManagement + warnings)**~~ ✅ — partial + `ParticipantTypes` + Player/Organizer services ที่เคยมี CS86xx / CS8629; DTO noisy warnings ถูกกดในไฟล์ด้วย `#nullable disable warnings`
+10. **Refactor เชิงลึก (ทางเลือก):** แยก class เล็ก (live-state aggregator, billing orchestrator) เพื่อ unit test — ไม่จำเป็นก่อนปล่อย production
+11. **Settings hub** (/settings): notification toggles per category + dark mode + linked accounts
+12. ~~**withOpacity → withValues(alpha:) sweep**~~ ✅ **เสร็จแล้ว** (`lib/` ไม่เหลือ `.withOpacity(`)
+13. ~~**Skeleton Loaders ขยายไปหน้าอื่น**~~ ✅ **เสร็จแล้ว** — `SessionCardListSkeleton` (ค้นหา + ประวัติ), `MyGamesPageSkeleton`, `WalletPageSkeleton`
+14. **UI/UX Polish & Store Preparation:** App Icon, Splash Screen, Permissions, App Store screenshots, Empty states with illustration
 
 <!-- ตัวอย่างการแจ้งแก้ UI ให้ผม
 เครื่องที่เทส: iPad Mini 5 (หรือ iPhone SE, Galaxy S23) หน้าจอ: จัดการก๊วน manage_game.dart ปัญหาที่เจอ: ในการ์ดสนามตรงปุ่ม Pause ไอคอนมันเล็กเกินไป และชื่อผู้เล่นในช่องมันยาวจนตกบรรทัดไปทับขอบการ์ด -->

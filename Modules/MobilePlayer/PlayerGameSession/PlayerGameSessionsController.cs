@@ -73,6 +73,22 @@ namespace DropInBadAPI.Controllers.MobilePlayer
             return Ok(new Response<IEnumerable<UpcomingSessionCardDto>> { Status = 200, Message = "History sessions retrieved successfully.", Data = sessions });
         }
 
+        [HttpGet("share/{sessionPublicId:guid}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<Response<UpcomingSessionCardDto>>> GetSessionCardForShare(Guid sessionPublicId)
+        {
+            var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) != null
+                ? int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!)
+                : (int?)null;
+
+            var card = await _playerSessionService.GetSessionCardByPublicIdAsync(sessionPublicId, currentUserId);
+            if (card == null)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Session not found or no longer open for booking." });
+            }
+            return Ok(new Response<UpcomingSessionCardDto> { Status = 200, Message = "Session card retrieved successfully.", Data = card });
+        }
+
         [HttpGet("{id}")]
         [AllowAnonymous]
         public async Task<ActionResult<Response<PlayerGameSessionViewDto>>> GetSessionForPlayer(int id)

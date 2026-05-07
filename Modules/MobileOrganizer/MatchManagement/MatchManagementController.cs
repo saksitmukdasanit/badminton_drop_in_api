@@ -1,3 +1,4 @@
+using DropInBadAPI.Constants;
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Interfaces;
 using DropInBadAPI.Models; // << เพิ่ม using สำหรับ Response<T>
@@ -64,8 +65,7 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpGet("participants/{participantType}/{participantId}/bill-preview")]
         public async Task<ActionResult<Response<BillSummaryDto>>> GetBillPreview(string participantType, int participantId)
         {
-            if (!participantType.Equals("member", StringComparison.OrdinalIgnoreCase) && 
-                !participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
+            if (!ParticipantTypes.IsMemberOrGuest(participantType))
             {
                 return BadRequest(new Response<object> { Status = 400, Message = "Participant type must be 'member' or 'guest'." });
             }
@@ -83,8 +83,7 @@ namespace DropInBadAPI.Controllers.Mobile
         public async Task<ActionResult<Response<BillSummaryDto>>> CheckoutParticipant(string participantType, int participantId, [FromBody] CheckoutRequestDto? dto = null)
         {
             // FIX: ปรับให้รองรับตัวพิมพ์เล็ก/ใหญ่ (Case-Insensitive)
-            if (!participantType.Equals("member", StringComparison.OrdinalIgnoreCase) && 
-                !participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
+            if (!ParticipantTypes.IsMemberOrGuest(participantType))
             {
                 return BadRequest(new Response<object> { Status = 400, Message = "Participant type must be 'member' or 'guest'." });
             }
@@ -178,7 +177,7 @@ namespace DropInBadAPI.Controllers.Mobile
         [HttpPut("participants/{participantType}/{participantId}/skill")]
         public async Task<ActionResult<Response<object>>> UpdateParticipantSkill(string participantType, int participantId, [FromBody] UpdateParticipantSkillDto dto)
         {
-            if (participantType != "member" && participantType != "guest")
+            if (!ParticipantTypes.IsMemberOrGuest(participantType))
             {
                 return BadRequest(new Response<object> { Status = 400, Message = "Participant type must be 'member' or 'guest'." });
             }

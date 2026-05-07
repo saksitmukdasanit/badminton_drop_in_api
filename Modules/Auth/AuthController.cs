@@ -155,9 +155,129 @@ namespace DropInBadAPI.Controllers.Mobile
             }
             return Ok(new Response<object> { Status = 200, Message = message });
         }
+
+        // --- Social Login ---
+
+        [HttpPost("login-google")]
+        [AllowAnonymous]
+        public async Task<ActionResult<Response<SocialLoginResponseDto>>> LoginWithGoogle([FromBody] GoogleLoginDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.IdToken))
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = "Missing idToken." });
+            }
+
+            var (response, errorMessage) = await _authService.LoginWithGoogleAsync(dto);
+            if (response == null)
+            {
+                return Unauthorized(new Response<object> { Status = 401, Message = errorMessage });
+            }
+            return Ok(new Response<SocialLoginResponseDto>
+            {
+                Status = 200,
+                Message = response.RequiresPhoneVerification ? "Login successful, phone verification required." : "Login successful.",
+                Data = response
+            });
+        }
+
+        [HttpPost("login-apple")]
+        [AllowAnonymous]
+        public async Task<ActionResult<Response<SocialLoginResponseDto>>> LoginWithApple([FromBody] AppleLoginDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.IdentityToken))
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = "Missing identityToken." });
+            }
+
+            var (response, errorMessage) = await _authService.LoginWithAppleAsync(dto);
+            if (response == null)
+            {
+                return Unauthorized(new Response<object> { Status = 401, Message = errorMessage });
+            }
+            return Ok(new Response<SocialLoginResponseDto>
+            {
+                Status = 200,
+                Message = response.RequiresPhoneVerification ? "Login successful, phone verification required." : "Login successful.",
+                Data = response
+            });
+        }
+
+        /// <summary>
+        /// เชื่อมเบอร์โทรกับบัญชีที่ login ผ่าน social (ใช้หลัง social signup ครั้งแรก)
+        /// — บันทึกเบอร์โทรลง UserProfile แล้วส่ง OTP ทันที. หลังจากนี้ผู้ใช้จะ verify ผ่าน /verify-otp endpoint เดิม
+        /// </summary>
+        [HttpPost("link-phone")]
+        [Authorize]
+        public async Task<IActionResult> LinkPhoneNumber([FromBody] LinkPhoneDto dto)
+        {
+            var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userIdString))
+            {
+                return Unauthorized();
+            }
+
+            var (success, message) = await _authService.LinkPhoneNumberAsync(int.Parse(userIdString), dto.PhoneNumber);
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = message });
+            }
+            return Ok(new Response<object> { Status = 200, Message = message });
+        }
+
+        // --- Account Deletion (Apple Guideline 5.1.1(v)) ---
+
+        /// <summary>
+        /// ขอลบบัญชี — soft-delete + 30-day grace period. หลังครบ 30 วันจะถูก hard-delete โดย background job
+        /// </summary>
+        [HttpPost("request-deletion")]
+        [Authorize]
+        public async Task<IActionResult> RequestAccountDeletion()
+        {
+            var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userIdString))
+            {
+                return Unauthorized();
+            }
+
+            var (success, message, scheduledAt) = await _authService.RequestAccountDeletionAsync(int.Parse(userIdString));
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = message });
+            }
+            return Ok(new Response<AccountDeletionResponseDto>
+            {
+                Status = 200,
+                Message = message,
+                Data = new AccountDeletionResponseDto(scheduledAt!.Value)
+            });
+        }
+
+        /// <summary>
+        /// กู้คืนบัญชีในระยะ 30 วัน
+        /// </summary>
+        [HttpPost("cancel-deletion")]
+        [Authorize]
+        public async Task<IActionResult> CancelAccountDeletion()
+        {
+            var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrEmpty(userIdString))
+            {
+                return Unauthorized();
+            }
+
+            var (success, message) = await _authService.CancelAccountDeletionAsync(int.Parse(userIdString));
+            if (!success)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = message });
+            }
+            return Ok(new Response<object> { Status = 200, Message = message });
+        }
     }
+
+    public record AccountDeletionResponseDto(DateTime ScheduledForDeletionAt);
 
     // DTOs สำหรับ OTP (ใส่ไว้ในไฟล์เดียวกันหรือแยกไฟล์ก็ได้)
     public record VerifyOtpDto(string PhoneNumber, string Otp);
     public record ResendOtpDto(string PhoneNumber);
+    public record LinkPhoneDto(string PhoneNumber);
 }

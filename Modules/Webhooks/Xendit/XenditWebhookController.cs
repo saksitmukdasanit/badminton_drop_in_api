@@ -22,11 +22,19 @@ namespace DropInBadAPI.Controllers.Webhooks
         [HttpPost("qr-payment")]
         public async Task<IActionResult> HandleQrPayment()
         {
-            // 1. ตรวจสอบ Webhook Token เพื่อความปลอดภัย (ป้องกันคนยิง API มั่ว)
+            // SECURITY: ห้าม allow webhook โดยไม่มี token verification เด็ดขาด
+            // ถ้า config ไม่ได้ตั้งค่า ให้ reject ทุกคำขอเพื่อกัน spoof
             var webhookToken = _configuration["Xendit:WebhookVerificationToken"];
-            if (!string.IsNullOrEmpty(webhookToken) && Request.Headers.TryGetValue("x-callback-token", out var tokenReceived))
+            if (string.IsNullOrEmpty(webhookToken))
             {
-                if (tokenReceived != webhookToken) return Unauthorized("Invalid webhook token");
+                Console.WriteLine("Xendit webhook rejected: WebhookVerificationToken not configured.");
+                return StatusCode(503, "Webhook verification not configured");
+            }
+
+            if (!Request.Headers.TryGetValue("x-callback-token", out var tokenReceived) ||
+                tokenReceived != webhookToken)
+            {
+                return Unauthorized("Invalid webhook token");
             }
 
             using var reader = new StreamReader(Request.Body);

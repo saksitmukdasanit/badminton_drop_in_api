@@ -1,3 +1,4 @@
+using DropInBadAPI.Constants;
 using DropInBadAPI.Data;
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Interfaces;
@@ -52,19 +53,19 @@ namespace DropInBadAPI.Services
                 .Include(m => m.MatchPlayers)
                 .ToListAsync();
 
-            var busyUserIds = activeMatches.SelectMany(m => m.MatchPlayers).Where(mp => mp.UserId.HasValue).Select(mp => mp.UserId.Value).ToHashSet();
-            var busyWalkinIds = activeMatches.SelectMany(m => m.MatchPlayers).Where(mp => mp.WalkinId.HasValue).Select(mp => mp.WalkinId.Value).ToHashSet();
+            var busyUserIds = activeMatches.SelectMany(m => m.MatchPlayers).Where(mp => mp.UserId != null).Select(mp => mp.UserId!.Value).ToHashSet();
+            var busyWalkinIds = activeMatches.SelectMany(m => m.MatchPlayers).Where(mp => mp.WalkinId != null).Select(mp => mp.WalkinId!.Value).ToHashSet();
 
             var members = await _context.SessionParticipants
                 .Where(p => p.SessionId == sessionId && p.Status == 1 && p.CheckinTime != null && p.CheckoutTime == null && !busyUserIds.Contains(p.UserId))
-                .Include(p => p.User.UserProfile)
+                .Include(p => p.User!).ThenInclude(u => u.UserProfile)
                 .Include(p => p.SkillLevel)
                 .Select(p => new WaitingPlayerDto
                 {
                     ParticipantId = p.ParticipantId,
-                    ParticipantType = "Member",
-                    Nickname = p.User.UserProfile.Nickname,
-                    CheckedInTime = p.CheckinTime.Value,
+                    ParticipantType = ParticipantTypes.Member,
+                    Nickname = p.User.UserProfile != null ? p.User.UserProfile.Nickname ?? "" : "",
+                    CheckedInTime = p.CheckinTime!.Value,
                     SkillLevelName = p.SkillLevel != null ? p.SkillLevel.LevelName : null
                 }).ToListAsync();
 
@@ -74,9 +75,9 @@ namespace DropInBadAPI.Services
                 .Select(g => new WaitingPlayerDto
                 {
                     ParticipantId = g.WalkinId,
-                    ParticipantType = "Guest",
+                    ParticipantType = ParticipantTypes.Guest,
                     Nickname = g.GuestName,
-                    CheckedInTime = g.CheckinTime.Value,
+                    CheckedInTime = g.CheckinTime!.Value,
                     SkillLevelName = g.SkillLevel != null ? g.SkillLevel.LevelName : null
                 }).ToListAsync();
 

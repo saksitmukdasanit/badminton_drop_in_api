@@ -145,7 +145,7 @@ namespace DropInBadAPI.Service.Mobile.Organizer
                 op.User?.UserProfile?.Gender != null ? (int)op.User.UserProfile.Gender : null,
                 op.User?.UserProfile?.EmergencyContactName,
                 op.User?.UserProfile?.EmergencyContactPhone,
-                op.NationalId,
+                op.NationalId ?? "",
                 op.BankId,
                 op.Bank?.BankName,
                 op.BankAccountNumber,

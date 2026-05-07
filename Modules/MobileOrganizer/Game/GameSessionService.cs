@@ -18,17 +18,31 @@ namespace DropInBadAPI.Service.Mobile.Game
         private readonly IMatchManagementService _matchManagementService;
         private readonly IConfiguration _configuration;
         private readonly INotificationService _notificationService;
+        private readonly IGameSessionBillingService _billingService;
+        private readonly IGameSessionBookingService _bookingService;
+        private readonly IAutoMatchService _autoMatchService;
 
-        public GameSessionService(BadmintonDbContext context, IHubContext<ManagementGameHub> hubContext, IMatchManagementService matchManagementService, IConfiguration configuration, INotificationService notificationService)
+        public GameSessionService(
+            BadmintonDbContext context,
+            IHubContext<ManagementGameHub> hubContext,
+            IMatchManagementService matchManagementService,
+            IConfiguration configuration,
+            INotificationService notificationService,
+            IGameSessionBillingService billingService,
+            IGameSessionBookingService bookingService,
+            IAutoMatchService autoMatchService)
         {
             _context = context;
             _hubContext = hubContext;
             _matchManagementService = matchManagementService;
             _configuration = configuration;
             _notificationService = notificationService;
+            _billingService = billingService;
+            _bookingService = bookingService;
+            _autoMatchService = autoMatchService;
         }
 
-        public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto)
+        public async Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto, bool notifyFollowers = true)
         {
             if (dto.StartTime >= dto.EndTime)
             {
@@ -123,24 +137,32 @@ namespace DropInBadAPI.Service.Mobile.Game
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
 
-                    // --- แจ้งเตือนผู้ติดตาม (Followers) ของผู้จัดเกี่ยวกับก๊วนใหม่ ---
-                    var organizer = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerUserId);
-                    var followers = await _context.UserFollows.Where(f => f.OrganizerId == organizerUserId).Select(f => f.FollowerId).ToListAsync();
-                    
-                    var thaiCulture = new CultureInfo("th-TH");
-                    string sessionDateStr = newSession.SessionDate.ToString("dd/MM/yyyy", thaiCulture);
-                    string timeStr = $"{newSession.StartTime.ToString("HH:mm")} - {newSession.EndTime.ToString("HH:mm")} น.";
-                    string notiMessage = $"'{organizer?.UserProfile?.Nickname}' ได้สร้างก๊วน '{newSession.GroupName}' วันที่ {sessionDateStr} เวลา {timeStr}";
-
-                    foreach(var followerId in followers)
+                    if (notifyFollowers)
                     {
-                        await _notificationService.SendNotificationAsync(followerId, "ก๊วนใหม่จากผู้จัดที่คุณติดตาม", notiMessage, "NEW_SESSION_FROM_FOLLOWED_ORGANIZER", newSession.SessionId);
+                        // --- แจ้งเตือนผู้ติดตาม (Followers) ของผู้จัดเกี่ยวกับก๊วนใหม่ ---
+                        var organizer = await _context.Users.Include(u => u.UserProfile).FirstOrDefaultAsync(u => u.UserId == organizerUserId);
+                        var followers = await _context.UserFollows.Where(f => f.OrganizerId == organizerUserId).Select(f => f.FollowerId).ToListAsync();
+
+                        var thaiCulture = new CultureInfo("th-TH");
+                        string sessionDateStr = newSession.SessionDate.ToString("dd/MM/yyyy", thaiCulture);
+                        string timeStr = $"{newSession.StartTime.ToString("HH:mm")} - {newSession.EndTime.ToString("HH:mm")} น.";
+                        string notiMessage = $"'{organizer?.UserProfile?.Nickname}' ได้สร้างก๊วน '{newSession.GroupName}' วันที่ {sessionDateStr} เวลา {timeStr}";
+
+                        foreach (var followerId in followers)
+                        {
+                            await _notificationService.SendNotificationAsync(
+                                followerId,
+                                "ก๊วนใหม่จากผู้จัดที่คุณติดตาม",
+                                notiMessage,
+                                "NEW_SESSION_FROM_FOLLOWED_ORGANIZER",
+                                newSession.SessionId);
+                        }
                     }
 
                     // คืนค่าหลังจาก Commit สำเร็จ
                     return (await GetSessionForManageViewAsync(newSession.SessionId, organizerUserId))!;
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     // ไม่ต้อง Rollback ตรงนี้แล้ว เพราะถ้าเกิด Exception ก่อน Commit, Transaction จะ Rollback เอง
                     // await transaction.RollbackAsync(); // << เอาออกได้
@@ -161,6 +183,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .Select(s => new ManageGameSessionDto
                 {
                     SessionId = s.SessionId,
+                    SessionPublicId = s.SessionPublicId,
                     GroupName = s.GroupName,
                     Status = s.Status ?? 1,
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime),
@@ -212,8 +235,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .ToListAsync(); // ดึงข้อมูลมาก่อน
 
             // Map ข้อมูลพร้อมใส่จำนวนเกม
-            session.Participants.AddRange(registeredParticipants.Select(p => CreateParticipantDto(p, memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId] : 0)));
-            session.Participants.AddRange(walkinGuests.Select(g => CreateParticipantDto(g, guestGameCounts.ContainsKey(g.WalkinId) ? guestGameCounts[g.WalkinId] : 0)));
+            session.Participants.AddRange(registeredParticipants.Select(p => ParticipantDtoMapper.FromMember(p, memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId] : 0)));
+            session.Participants.AddRange(walkinGuests.Select(g => ParticipantDtoMapper.FromGuest(g, guestGameCounts.ContainsKey(g.WalkinId) ? guestGameCounts[g.WalkinId] : 0)));
 
             session.Participants = session.Participants.OrderBy(p => p.Status).ThenBy(p => p.ParticipantId).ToList();
             session.CurrentParticipants = session.Participants.Count(p => p.Status == 1);
@@ -233,12 +256,13 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .Select(s => new EditGameSessionDto
                 {
                     SessionId = s.SessionId,
+                    SessionPublicId = s.SessionPublicId,
                     GroupName = s.GroupName,
                     Status = s.Status ?? 1,
                     VenueData = new VenueDataDto(
-                        s.Venue.GooglePlaceId,
+                        s.Venue!.GooglePlaceId,
                         s.Venue.VenueName,
-                        s.Venue.Address,
+                        s.Venue.Address ?? "",
                         s.Venue.Latitude ?? 0,
                         s.Venue.Longitude ?? 0
                     ),
@@ -299,62 +323,14 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .Include(g => g.SkillLevel)
                 .ToListAsync();
 
-            session.Participants.AddRange(registeredParticipants.Select(p => CreateParticipantDto(p, memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId] : 0)));
-            session.Participants.AddRange(walkinGuests.Select(g => CreateParticipantDto(g, guestGameCounts.ContainsKey(g.WalkinId) ? guestGameCounts[g.WalkinId] : 0)));
+            session.Participants.AddRange(registeredParticipants.Select(p => ParticipantDtoMapper.FromMember(p, memberGameCounts.ContainsKey(p.UserId) ? memberGameCounts[p.UserId] : 0)));
+            session.Participants.AddRange(walkinGuests.Select(g => ParticipantDtoMapper.FromGuest(g, guestGameCounts.ContainsKey(g.WalkinId) ? guestGameCounts[g.WalkinId] : 0)));
 
             session.Participants = session.Participants.OrderBy(p => p.Status).ThenBy(p => p.ParticipantId).ToList();
             session.CurrentParticipants = session.Participants.Count(p => p.Status == 1); // คำนวณจำนวนผู้เล่น
 
             return session;
         }
-
-        private static ParticipantDto CreateParticipantDto(SessionParticipant p, int gamesPlayed = 0)
-        {
-            return new ParticipantDto
-            {
-                ParticipantId = p.ParticipantId,
-                ParticipantType = "Member",
-                UserId = p.UserId,
-                Nickname = p.User.UserProfile!.Nickname,
-                FullName = p.User.UserProfile.FirstName + " " + p.User.UserProfile.LastName,
-                GenderName = p.User.UserProfile.Gender == 1 ? "ชาย" :
-            p.User.UserProfile.Gender == 2 ? "หญิง" :
-            p.User.UserProfile.Gender == 3 ? "อื่นๆ" : null,
-                ProfilePhotoUrl = p.User.UserProfile.ProfilePhotoUrl,
-                SkillLevelId = p.SkillLevelId,
-                SkillLevelName = p.SkillLevel!.LevelName,
-                SkillLevelColor = p.SkillLevel.ColorHexCode,
-                Status = p.Status ?? 1,
-                CheckinTime = p.CheckinTime,
-                CheckoutTime = p.CheckoutTime,
-                TotalGamesPlayed = gamesPlayed // NEW
-            };
-        }
-
-        private static ParticipantDto CreateParticipantDto(SessionWalkinGuest g, int gamesPlayed = 0)
-        {
-            return new ParticipantDto
-            {
-                ParticipantId = g.WalkinId,
-                ParticipantType = "Guest",
-                UserId = null,
-                Nickname = g.GuestName,
-                FullName = null,
-                GenderName = g.Gender == 1 ? "ชาย" :
-            g.Gender == 2 ? "หญิง" :
-            g.Gender == 3 ? "อื่นๆ" : null,
-                ProfilePhotoUrl = null, // Walk-in ไม่มีรูปโปรไฟล์ในระบบ
-                SkillLevelId = g.SkillLevelId,
-                SkillLevelName = g.SkillLevel!.LevelName,
-                SkillLevelColor = g.SkillLevel.ColorHexCode,
-                Status = g.Status ?? 1,
-                CheckinTime = g.CheckinTime,
-                CheckoutTime = g.CheckoutTime,
-                TotalGamesPlayed = gamesPlayed // NEW
-            };
-        }
-
-
 
         public async Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId)
         {
@@ -373,6 +349,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 .OrderBy(s => s.SessionDate).ThenBy(s => s.StartTime)
                 .Select(s => new UpcomingSessionCardDto
                 {
+                    SessionPublicId = s.SessionPublicId,
                     SessionId = s.SessionId,
                     GroupName = s.GroupName, // << เพิ่มกลับเข้ามา
                     ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -383,6 +360,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime), // << เพิ่มกลับเข้ามา
                     CourtName = s.Venue.VenueName, // << เพิ่มกลับเข้ามา (ใช้ VenueName)
                     Location = s.Venue.Address,
+                    Latitude = s.Venue.Latitude,
+                    Longitude = s.Venue.Longitude,
                     Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue)
                           ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท"
                           : "สอบถามผู้จัด",
@@ -577,7 +556,7 @@ namespace DropInBadAPI.Service.Mobile.Game
         public async Task<bool> CancelSessionByOrganizerAsync(int sessionId, int organizerUserId)
         {
             var session = await _context.GameSessions
-                .Include(s => s.ParticipantBills) // Include บิลเพื่อดึงมาคืนเงิน
+                .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: ต้อง Include BillLineItems มาด้วย ไม่งั้น serviceFeeItem จะหา fee เจอเป็น null → คำนวณคืนเงินผู้จัดผิด
                 .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
 
             if (session == null) return false;
@@ -705,256 +684,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             return await CreateSessionAsync(organizerUserId, dto);
         }
 
-        public async Task<PlayerGameSessionViewDto?> GetSessionForPlayerViewAsync(int sessionId, int? currentUserId)
-        {
-            var session = await _context.GameSessions
-                .Where(s => s.SessionId == sessionId)
-                .Include(s => s.Venue)
-                .Include(s => s.ShuttlecockModel).ThenInclude(m => m.Brand)
-                .Include(s => s.GameSessionPhotos)
-                .Include(s => s.GameSessionFacilities).ThenInclude(f => f.Facility)
-                .Include(s => s.CreatedByUser).ThenInclude(u => u.UserProfile) // << ดึงข้อมูลผู้จัด
-                .Select(s => new PlayerGameSessionViewDto
-                {
-                    SessionId = s.SessionId,
-                    GroupName = s.GroupName,
-                    Status = s.Status ?? 1,
-                    SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                    SessionEnd = s.SessionDate.ToDateTime(s.EndTime),
-                    VenueName = s.Venue.VenueName,
-                    VenueAddress = s.Venue.Address,
-                    Latitude = s.Venue.Latitude,
-                    Longitude = s.Venue.Longitude,
-                    Organizer = new OrganizerInfoDto
-                    {
-                        UserId = s.CreatedByUserId,
-                        Nickname = s.CreatedByUser.UserProfile.Nickname,
-                        ProfilePhotoUrl = s.CreatedByUser.UserProfile.ProfilePhotoUrl
-                    },
-                    ShuttlecockInfo = s.ShuttlecockModel != null ? $"{s.ShuttlecockModel.Brand.BrandName} - {s.ShuttlecockModel.ModelName}" : null,
-                    // ... map ข้อมูลอื่นๆ ...
-                    MaxParticipants = s.MaxParticipants,
-                    Notes = s.Notes,
-                    PhotoUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
-                    Facilities = s.GameSessionFacilities.Select(f => new FacilityDto(f.FacilityId, f.Facility.FacilityName, f.Facility.IconUrl)).ToList()
-                })
-                .FirstOrDefaultAsync();
-
-            if (session == null) return null;
-
-            // ดึงรายชื่อผู้เล่น (เหมือนเดิม)
-            var participants = await _context.SessionParticipants
-                .Where(p => p.SessionId == sessionId && p.Status != 3) // ไม่แสดงคนที่ยกเลิก
-                .Select(p => new ParticipantDto
-                {
-                    ParticipantId = p.ParticipantId,
-                    ParticipantType = "Member",
-                    UserId = p.UserId,
-
-                    // --- ข้อมูลจาก UserProfile ---
-                    // ใช้ ! (Null-Forgiving Operator) เพราะ .Include() ทำให้เรามั่นใจว่า UserProfile จะไม่เป็น null
-                    Nickname = p.User!.UserProfile!.Nickname,
-                    FullName = p.User.UserProfile.FirstName + " " + p.User.UserProfile.LastName,
-                    GenderName = p.User.UserProfile.Gender == 1 ? "ชาย" :
-                    p.User.UserProfile.Gender == 2 ? "หญิง" :
-                    p.User.UserProfile.Gender == 3 ? "อื่นๆ" : null,
-                    ProfilePhotoUrl = p.User.UserProfile.ProfilePhotoUrl,
-
-                    // --- ข้อมูลจาก OrganizerSkillLevel ---
-                    // ใช้ ?. (Null-Conditional Operator) เพราะผู้เล่นอาจจะยังไม่ถูกกำหนดระดับมือ (SkillLevelId อาจเป็น null)
-                    SkillLevelId = p.SkillLevelId,
-                    SkillLevelName = p.SkillLevel!.LevelName,
-                    SkillLevelColor = p.SkillLevel.ColorHexCode,
-
-                    // --- ข้อมูลสถานะ ---
-                    Status = p.Status ?? 1, // ถ้า Status เป็น null ให้ถือว่าเป็น 1 (เข้าร่วม)
-                    CheckinTime = p.CheckinTime
-                })
-                .ToListAsync();
-            session.Participants = participants;
-            session.CurrentParticipants = participants.Count(p => p.Status == 1);
-
-            // **สำคัญ:** ตรวจสอบสถานะของผู้ใช้ปัจจุบัน
-            session.CurrentUserStatus = "NotJoined";
-            if (currentUserId.HasValue)
-            {
-                var currentUserParticipation = await _context.SessionParticipants
-                    .FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == currentUserId.Value);
-
-                if (currentUserParticipation != null)
-                {
-                    session.CurrentUserStatus = currentUserParticipation.Status switch
-                    {
-                        1 => "Joined",
-                        2 => "Waitlisted",
-                        _ => "NotJoined"
-                    };
-                }
-            }
-
-            return session;
-        }
-
-
-        public async Task<(JoinSessionResponseDto? Data, string ErrorMessage)> JoinSessionAsync(int sessionId, int userId)
-        {
-            // 1. ค้นหาก๊วนที่จะเข้าร่วม
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants)
-                .Include(s => s.SessionWalkinGuests) // เพิ่ม: โหลด Walk-in มาด้วยเพื่อนับจำนวนให้ถูกต้อง
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId);
-
-            if (session == null) return (null, "Session not found.");
-            if (session.Status != 1) return (null, "This session is no longer open for booking.");
-
-            // 2. ตรวจสอบว่าผู้จัดพยายามจองก๊วนตัวเองหรือไม่ (ถ้าไม่ต้องการให้ทำ)
-            if (session.CreatedByUserId == userId)
-            {
-                return (null, "Organizers cannot join their own session as a participant.");
-            }
-
-            // 3. ตรวจสอบว่าเคยจองไปแล้วหรือยัง (เผื่อกรณีกดซ้ำ)
-            var existingParticipant = session.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
-            if (existingParticipant != null && existingParticipant.Status != 3) // 3 = Cancelled
-            {
-                return (null, "You are already registered for this session.");
-            }
-
-            // --- NEW LOGIC: Look up the member's saved skill level for this organizer ---
-            int organizerUserId = session.CreatedByUserId;
-            int? savedSkillLevelId = await _context.UserOrganizerSkills
-                .Where(uos => uos.OrganizerUserId == organizerUserId && uos.UserId == userId)
-                .Select(uos => (int?)uos.SkillLevelId)
-                .FirstOrDefaultAsync();
-
-
-            int newStatus;
-            string statusMessage;
-
-            // 4. ตรวจสอบว่าก๊วนเต็มหรือยัง
-            var activeParticipants = session.SessionParticipants.Count(p => p.Status == 1) + session.SessionWalkinGuests.Count(g => g.Status == 1);
-            var waitlistedParticipants = session.SessionParticipants.Count(p => p.Status == 2) + session.SessionWalkinGuests.Count(g => g.Status == 2);
-
-            // เงื่อนไขใหม่: ต้องไม่เต็ม AND ต้องไม่มีใครรอคิวอยู่ ถึงจะได้เป็นตัวจริง
-            if (activeParticipants < session.MaxParticipants && waitlistedParticipants == 0)
-            {
-                // ยังไม่เต็ม -> เข้าร่วมเป็นตัวจริง
-                newStatus = 1;
-                statusMessage = "Joined successfully.";
-            }
-            else
-            {
-                // ก๊วนเต็ม หรือ มีคนรอคิวอยู่ -> ไปต่อคิวสำรอง
-                newStatus = 2;
-                statusMessage = "You are on the waitlist.";
-            }
-
-            // 5. บันทึกข้อมูล
-            SessionParticipant newParticipantEntry;
-            if (existingParticipant != null) // กรณีกลับมาจองใหม่หลังจากเคยกด Cancel
-            {
-                existingParticipant.Status = (byte)newStatus;
-                existingParticipant.JoinedDate = DateTime.UtcNow;
-                existingParticipant.SkillLevelId = savedSkillLevelId; // Apply saved skill level
-                newParticipantEntry = existingParticipant;
-            }
-            else // กรณีจองครั้งแรก
-            {
-                newParticipantEntry = new SessionParticipant
-                {
-                    SessionId = sessionId,
-                    UserId = userId,
-                    Status = (byte)newStatus,
-                    JoinedDate = DateTime.UtcNow,
-                    SkillLevelId = savedSkillLevelId // Apply saved skill level
-                };
-                await _context.SessionParticipants.AddAsync(newParticipantEntry);
-            }
-
-            await _context.SaveChangesAsync();
-
-            var responseDto = new JoinSessionResponseDto
-            {
-                ParticipantId = newParticipantEntry.ParticipantId,
-                Status = newStatus,
-                StatusMessage = statusMessage
-            };
-
-            return (responseDto, string.Empty);
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> CancelBookingAsync(int sessionId, int userId)
-        {
-            var participant = await _context.SessionParticipants
-                .FirstOrDefaultAsync(p => p.SessionId == sessionId && p.UserId == userId);
-
-            if (participant == null || participant.Status == 3) // ถ้าไม่เจอ หรือยกเลิกไปแล้ว
-            {
-                return (false, "Booking not found.");
-            }
-
-            // 1. ตั้งค่าสถานะเป็น "ยกเลิก"
-            participant.Status = 3;
-
-            // --- REMOVED: Auto-promote logic for user cancellation ---
-            // ปิดการเลื่อนสถานะอัตโนมัติเมื่อผู้เล่นกดยกเลิกเอง
-            // เพื่อให้ผู้จัดเป็นคนจัดการคิวสำรองเองทั้งหมด
-
-            await _context.SaveChangesAsync();
-            return (true, "Your booking has been cancelled.");
-        }
-
-        public async Task<(ParticipantDto? Data, string ErrorMessage)> AddGuestAsync(int sessionId, int organizerUserId, AddGuestDto dto)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants)
-                .Include(s => s.SessionWalkinGuests)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null)
-            {
-                return (null, "Session not found or you do not have permission.");
-            }
-
-            byte newStatus;
-            var currentParticipants = session.SessionParticipants.Count(p => p.Status == 1) + session.SessionWalkinGuests.Count(g => g.Status == 1);
-            var waitlistedParticipants = session.SessionParticipants.Count(p => p.Status == 2) + session.SessionWalkinGuests.Count(g => g.Status == 2);
-
-            // เงื่อนไขใหม่: ถ้าเต็ม หรือ มีคนรอคิวอยู่ ให้ไปเป็นสำรอง
-            if (currentParticipants >= session.MaxParticipants || waitlistedParticipants > 0)
-            {
-                newStatus = 2; // 2 = Waitlisted
-            }
-            else
-            {
-                newStatus = 1; // 1 = Joined
-            }
-
-            var newGuest = new SessionWalkinGuest
-            {
-                SessionId = sessionId,
-                GuestName = dto.GuestName,
-                PhoneNumber = dto.PhoneNumber,
-                Gender = (short)dto.Gender,
-                SkillLevelId = dto.SkillLevelId,
-                Status = newStatus,
-                CreatedBy = organizerUserId,
-                CreatedDate = DateTime.UtcNow,
-                CheckinTime = DateTime.UtcNow,
-            };
-
-            await _context.SessionWalkinGuests.AddAsync(newGuest);
-            await _context.SaveChangesAsync();
-
-            // ดึงข้อมูล SkillLevel เพื่อสร้าง ParticipantDto ที่สมบูรณ์
-            var skillLevel = dto.SkillLevelId.HasValue
-                ? await _context.OrganizerSkillLevels.FindAsync(dto.SkillLevelId.Value)
-                : null;
-
-            newGuest.SkillLevel = skillLevel; // Attach the loaded skill level
-
-            return (CreateParticipantDto(newGuest), string.Empty);
-        }
+        public Task<(ParticipantDto? Data, string ErrorMessage)> AddGuestAsync(int sessionId, int organizerUserId, AddGuestDto dto)
+            => _bookingService.AddGuestAsync(sessionId, organizerUserId, dto);
 
         public async Task<(bool Success, string ErrorMessage)> UpdateParticipantSkillLevelAsync(int sessionId, string participantType, int participantId, int? newSkillLevelId, int organizerUserId)
         {
@@ -1026,6 +757,7 @@ namespace DropInBadAPI.Service.Mobile.Game
                 
                 var dto = new UpcomingSessionCardDto
                 {
+                    SessionPublicId = s.SessionPublicId,
                     SessionId = s.SessionId,
                     GroupName = s.GroupName,
                     ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -1036,6 +768,8 @@ namespace DropInBadAPI.Service.Mobile.Game
                     SessionStart = sessionStartDt,
                     CourtName = s.Venue.VenueName,
                     Location = s.Venue.Address,
+                    Latitude = s.Venue.Latitude,
+                    Longitude = s.Venue.Longitude,
                     Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue)
                           ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท"
                           : "สอบถามผู้จัด",
@@ -1058,12 +792,13 @@ namespace DropInBadAPI.Service.Mobile.Game
                     PaidAmount = s.ParticipantBills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าธรรมเนียม").Sum(li => li.Amount),
                     TotalIncome = (s.SessionParticipants.Count(p => p.Status == 1) + s.SessionWalkinGuests.Count(g => g.Status == 1)) * ((s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0)),
                     
-                    Facilities = s.GameSessionFacilities.Select(f => new FacilityDto(f.FacilityId, f.Facility.FacilityName, f.Facility.IconUrl)).ToList(),
+                    Facilities = s.GameSessionFacilities.Where(f => f.Facility != null)
+                        .Select(f => new FacilityDto(f.FacilityId, f.Facility!.FacilityName, f.Facility.IconUrl ?? "")).ToList(),
                     Participants = new List<ParticipantDto>()
                 };
 
-                var activeMembers = s.SessionParticipants.Where(p => p.Status != 3).Select(p => CreateParticipantDto(p)).ToList();
-                var activeGuests = s.SessionWalkinGuests.Where(g => g.Status != 3).Select(g => CreateParticipantDto(g)).ToList();
+                var activeMembers = s.SessionParticipants.Where(p => p.Status != 3).Select(p => ParticipantDtoMapper.FromMember(p)).ToList();
+                var activeGuests = s.SessionWalkinGuests.Where(g => g.Status != 3).Select(g => ParticipantDtoMapper.FromGuest(g)).ToList();
 
                 dto.Participants = activeMembers.Concat(activeGuests).OrderBy(p => p.Status).ThenBy(p => p.ParticipantId).ToList();
 
@@ -1240,7 +975,7 @@ namespace DropInBadAPI.Service.Mobile.Game
             // ดึงข้อมูลแมตช์ที่จบแล้ว (Status = 2)
             var matches = await _context.Matches
                 .Where(m => m.SessionId == sessionId && m.Status == 2)
-                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User!).ThenInclude(u => u.UserProfile)
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
                 .OrderBy(m => m.StartTime)
                 .ToListAsync();
@@ -1332,264 +1067,8 @@ namespace DropInBadAPI.Service.Mobile.Game
             return (true, "Session started successfully.");
         }
 
-        public async Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants).ThenInclude(p => p.User.UserProfile)
-                .Include(s => s.SessionWalkinGuests)
-                .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems) // FIX: สำคัญมาก ป้องกันค่าธรรมเนียมรั่วไหล
-                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
-                .AsSplitQuery() // FIX: ป้องกันปัญหา Cartesian Explosion
-                .AsNoTracking()
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return null;
-
-            // 1. Participants (Active only)
-            var activeMembers = session.SessionParticipants.Where(p => p.Status == 1).ToList();
-            var activeGuests = session.SessionWalkinGuests.Where(g => g.Status == 1).ToList();
-            int currentParticipants = activeMembers.Count + activeGuests.Count;
-
-            // 2. Fees & Costs
-            decimal courtFeePerPerson = session.CourtFeePerPerson ?? 0;
-            decimal shuttleFeePerPerson = session.ShuttlecockFeePerPerson ?? 0;
-            decimal totalCourtCost = session.TotalCourtCost ?? 0; // ต้นทุนที่ผู้จัดจ่าย
-            decimal shuttleCostPerUnit = session.ShuttlecockCostPerUnit ?? 0;
-
-            // Helper to count games
-            int CountGames(int? userId, int? walkinId)
-            {
-                return session.Matches.Count(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId && mp.WalkinId == walkinId));
-            }
-            
-            // ตัวแปรสำหรับสะสมยอดรวม (Aggregation)
-            decimal aggTotalCourtIncome = 0;
-            decimal aggTotalShuttleFee = 0;
-            decimal aggTotalIncome = 0;
-            decimal aggPaidAmount = 0;
-            decimal aggUnpaidAmount = 0;
-
-            // --- NEW: ตัวแปรสำหรับยอดสุทธิ (Net) ---
-            decimal aggNetTotalIncome = 0;
-            decimal aggNetPaidAmount = 0;
-            decimal aggNetUnpaidAmount = 0;
-            decimal aggTotalServiceFee = 0;
-
-            // --- NEW: ตัวแปรสำหรับสรุปยอดละเอียด ---
-            int countPaidCourt = 0;
-            int countUnpaidCourt = 0;
-            decimal sumPaidCourt = 0;
-            decimal sumUnpaidCourt = 0;
-            decimal sumPaidShuttle = 0;
-            decimal sumUnpaidShuttle = 0;
-            decimal sumAdditions = 0;
-            decimal sumSubtractions = 0;
-
-            decimal serviceFee = _configuration.GetValue<decimal>("ServiceFee");
-
-            var participantDtos = new List<ParticipantFinancialDto>();
-
-            // Helper ใหม่: คำนวณยอดเงินรายคนและแยกส่วนประกอบ
-            (decimal paid, decimal total, decimal courtPart, decimal shuttlePart, decimal srvFee, decimal netTotal, decimal netPaid, decimal netUnpaid) CalculateParticipantFinancials(int? userId, int? walkinId, int gamesPlayed)
-            {
-                var bills = session.ParticipantBills.Where(b => b.UserId == userId && b.WalkinId == walkinId && b.Status != 3).ToList();
-                
-                // FIX: ป้องกันการนำบิลค้างชำระ (Status=1) มาบวกซ้ำกับบิลที่จ่ายแล้ว (Status=2)
-                var activeBills = bills.Where(b => b.Status == 2).ToList();
-                if (!activeBills.Any()) 
-                {
-                    var latestPending = bills.Where(b => b.Status == 1).OrderByDescending(b => b.CreatedDate).FirstOrDefault();
-                    if (latestPending != null) activeBills.Add(latestPending);
-                }
-
-                // 1. คำนวณค่าใช้จ่ายมาตรฐาน
-                decimal cPart = courtFeePerPerson;
-                decimal sPart = session.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed;
-                decimal customItems = 0;
-
-                if (activeBills.Any())
-                {
-                    cPart = activeBills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าสนาม" || li.Description == "ค่าคอร์ท").Sum(li => li.Amount);
-                    if (cPart == 0 && courtFeePerPerson > 0) cPart = courtFeePerPerson; // Fallback
-
-                    sPart = activeBills.SelectMany(b => b.BillLineItems).Where(li => li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
-                    if (sPart == 0) sPart = session.CostingMethod == 2 ? shuttleFeePerPerson : shuttleFeePerPerson * gamesPlayed; // Fallback
-
-                    customItems = activeBills.SelectMany(b => b.BillLineItems).Where(li => li.Description != "ค่าสนาม" && li.Description != "ค่าคอร์ท" && li.Description != "ค่าธรรมเนียม" && !li.Description.StartsWith("ค่าลูกแบด")).Sum(li => li.Amount);
-                }
-                
-                // หักลบค่าธรรมเนียมแอปออก เพื่อให้แสดงเฉพาะรายรับของผู้จัด
-                decimal serviceFeeTotal = activeBills.SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
-                decimal serviceFeePaid = bills.Where(b => b.Status == 2).SelectMany(b => b.BillLineItems).Where(li => li.Description == "ค่าธรรมเนียม").Sum(li => li.Amount);
-
-                decimal paidVal = bills.Where(b => b.Status == 2).Sum(b => b.TotalAmount) - serviceFeePaid;
-                if (paidVal < 0) paidVal = 0;
-
-                decimal billedTotal = activeBills.Sum(b => b.TotalAmount) - serviceFeeTotal;
-                if (billedTotal < 0) billedTotal = 0;
-
-                decimal totalVal = cPart + sPart + customItems;
-                if (billedTotal > totalVal) totalVal = billedTotal;
-
-                decimal unpaidVal = totalVal - paidVal;
-                if (unpaidVal < 0) unpaidVal = 0;
-
-                // ค่าบริการที่เก็บได้จริง (สำหรับแสดงแยก)
-                decimal actualServiceFee = serviceFeeTotal > 0 ? serviceFeeTotal : (activeBills.Any() ? 0 : serviceFee);
-
-                return (paidVal, totalVal, cPart, sPart, actualServiceFee, totalVal, paidVal, unpaidVal);
-            }
-
-            // Helper สำหรับคำนวณสัดส่วนการจ่าย (Ratio Logic ย้ายมาจาก Frontend)
-            void CalculateBreakdown(decimal totalCost, decimal paidAmount, decimal courtFee, decimal shuttleFee)
-            {
-                decimal ratio = totalCost > 0 ? paidAmount / totalCost : 0;
-                if (ratio > 1) ratio = 1;
-
-                // Court
-                decimal cPaid = courtFee * ratio;
-                decimal cUnpaid = courtFee - cPaid;
-                sumPaidCourt += cPaid;
-                sumUnpaidCourt += cUnpaid;
-                if (cUnpaid <= 1) countPaidCourt++; else countUnpaidCourt++;
-
-                // Shuttle
-                decimal sPaid = shuttleFee * ratio;
-                decimal sUnpaid = shuttleFee - sPaid;
-                sumPaidShuttle += sPaid;
-                sumUnpaidShuttle += sUnpaid;
-
-                // Additions/Subtractions (ส่วนต่างจากค่ามาตรฐาน)
-                decimal standardTotal = courtFee + shuttleFee + serviceFee; // +Service Fee
-                decimal diff = totalCost - standardTotal;
-                // หมายเหตุ: Logic นี้เป็นการประมาณการคร่าวๆ จากยอดรวม
-                if (diff > 0.1m) sumAdditions += diff;
-                else if (diff < -0.1m) sumSubtractions += diff;
-            }
-
-            foreach (var m in activeMembers)
-            {
-                int games = CountGames(m.UserId, null);
-                var (paid, total, cPart, sPart, srvFee, netTotal, netPaid, netUnpaid) = CalculateParticipantFinancials(m.UserId, null, games);
-                
-                // สะสมยอดรวม
-                aggTotalCourtIncome += cPart;
-                aggTotalShuttleFee += sPart;
-                aggTotalIncome += total;
-                aggPaidAmount += paid;
-                aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
-
-                aggNetTotalIncome += netTotal;
-                aggNetPaidAmount += netPaid;
-                aggNetUnpaidAmount += netUnpaid;
-                aggTotalServiceFee += srvFee;
-
-                CalculateBreakdown(total, paid, cPart, sPart);
-
-                participantDtos.Add(new ParticipantFinancialDto
-                {
-                    ParticipantId = m.ParticipantId,
-                    ParticipantType = "Member",
-                    Nickname = m.User?.UserProfile?.Nickname ?? "N/A",
-                    Name = $"{m.User?.UserProfile?.FirstName} {m.User?.UserProfile?.LastName}",
-                    GamesPlayed = games,
-                    TotalCost = total,
-                    PaidAmount = paid,
-                    UnpaidAmount = total - paid > 0 ? total - paid : 0,
-                    CourtFee = cPart,   // ส่งค่าสนามที่คำนวณจาก API
-                    ShuttleFee = sPart,  // ส่งค่าลูกแบดที่คำนวณจาก API
-                    ServiceFee = srvFee,
-                    OrganizerNetTotal = netTotal,
-                    OrganizerNetPaid = netPaid,
-                    OrganizerNetUnpaid = netUnpaid
-                });
-            }
-
-            foreach (var g in activeGuests)
-            {
-                int games = CountGames(null, g.WalkinId);
-                var (paid, total, cPart, sPart, srvFee, netTotal, netPaid, netUnpaid) = CalculateParticipantFinancials(null, g.WalkinId, games);
-
-                // สะสมยอดรวม
-                aggTotalCourtIncome += cPart;
-                aggTotalShuttleFee += sPart;
-                aggTotalIncome += total;
-                aggPaidAmount += paid;
-                aggUnpaidAmount += (total - paid > 0 ? total - paid : 0);
-
-                aggNetTotalIncome += netTotal;
-                aggNetPaidAmount += netPaid;
-                aggNetUnpaidAmount += netUnpaid;
-                aggTotalServiceFee += srvFee;
-
-                CalculateBreakdown(total, paid, cPart, sPart);
-
-                participantDtos.Add(new ParticipantFinancialDto
-                {
-                    ParticipantId = g.WalkinId,
-                    ParticipantType = "Guest",
-                    Nickname = g.GuestName,
-                    Name = g.GuestName,
-                    GamesPlayed = games,
-                    TotalCost = total,
-                    PaidAmount = paid,
-                    UnpaidAmount = total - paid > 0 ? total - paid : 0,
-                    CourtFee = cPart,   // ส่งค่าสนามที่คำนวณจาก API
-                    ShuttleFee = sPart,  // ส่งค่าลูกแบดที่คำนวณจาก API
-                    ServiceFee = srvFee,
-                    OrganizerNetTotal = netTotal,
-                    OrganizerNetPaid = netPaid,
-                    OrganizerNetUnpaid = netUnpaid
-                });
-            }
-
-            // คำนวณต้นทุนรวม (ค่าสนาม + ค่าลูกแบดที่ใช้จริง)
-            int totalShuttlecocksUsed = session.Matches.Count(m => m.Status == 2);
-            decimal totalShuttleCost = totalShuttlecocksUsed * shuttleCostPerUnit;
-
-            // คำนวณยอดเงินสดและเงินโอน
-            var payments = await _context.Payments
-                .Where(p => p.Bill.SessionId == sessionId)
-                .ToListAsync();
-            decimal totalCash = payments.Where(p => p.PaymentMethod == 1).Sum(p => p.Amount);
-            decimal totalTransfer = payments.Where(p => p.PaymentMethod == 2).Sum(p => p.Amount);
-
-            return new GameSessionFinancialsDto
-            {
-                SessionId = session.SessionId,
-                GroupName = session.GroupName,
-                CurrentParticipants = currentParticipants,
-                CourtFeePerPerson = courtFeePerPerson,
-                ShuttlecockFeePerPerson = shuttleFeePerPerson,
-                ShuttlecockCostPerUnit = shuttleCostPerUnit, // ส่งราคาทุน
-                CostingMethod = session.CostingMethod.HasValue ? (int)session.CostingMethod.Value : null,
-                TotalCourtCost = totalCourtCost,
-                TotalCourtIncome = aggTotalCourtIncome, // ยอดรวมจากทุกคน
-                TotalShuttlecockFee = aggTotalShuttleFee, // ยอดรวมจากทุกคน
-                TotalShuttlecockCost = totalShuttleCost, // ส่งต้นทุนรวม
-                TotalIncome = aggTotalIncome, // ยอดรวมจากทุกคน (รวมค่าบริการ)
-                TotalExpense = totalCourtCost + totalShuttleCost, // ต้นทุนสนาม + ต้นทุนลูก
-                PaidAmount = aggPaidAmount,
-                TotalCashAmount = totalCash,
-                TotalTransferAmount = totalTransfer,
-                UnpaidAmount = aggUnpaidAmount,
-                TotalShuttlecocks = totalShuttlecocksUsed,
-                Participants = participantDtos,
-                // --- NEW: ส่งค่าสรุปละเอียดกลับไป ---
-                PaidCourtCount = countPaidCourt,
-                UnpaidCourtCount = countUnpaidCourt,
-                PaidCourtAmount = sumPaidCourt,
-                UnpaidCourtAmount = sumUnpaidCourt,
-                PaidShuttleAmount = sumPaidShuttle,
-                UnpaidShuttleAmount = sumUnpaidShuttle,
-                TotalAdditions = sumAdditions,
-                TotalSubtractions = sumSubtractions,
-                TotalServiceFeeDeducted = aggTotalServiceFee,
-                OrganizerNetTotalIncome = aggNetTotalIncome,
-                OrganizerNetPaidAmount = aggNetPaidAmount,
-                OrganizerNetUnpaidAmount = aggNetUnpaidAmount
-            };
-        }
+        public Task<GameSessionFinancialsDto?> GetSessionFinancialsAsync(int sessionId, int organizerUserId)
+            => _billingService.GetSessionFinancialsAsync(sessionId, organizerUserId);
 
         public async Task<bool> StartCompetitionAsync(int sessionId, int organizerUserId)
         {
@@ -1639,688 +1118,22 @@ namespace DropInBadAPI.Service.Mobile.Game
             return true;
         }
 
-        public async Task<(bool Success, string ErrorMessage)> RemoveParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants)
-                .Include(s => s.SessionWalkinGuests)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
+        public Task<(bool Success, string ErrorMessage)> RemoveParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId)
+            => _bookingService.RemoveParticipantAsync(sessionId, participantType, participantId, organizerUserId);
 
-            if (session == null) return (false, "Session not found or permission denied.");
+        public Task<(bool Success, string ErrorMessage)> PromoteWaitlistedParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId)
+            => _bookingService.PromoteWaitlistedParticipantAsync(sessionId, participantType, participantId, organizerUserId);
 
-            bool wasActive = false;
+        public Task<(bool Success, string ErrorMessage)> AutoMatchAsync(int sessionId, int organizerUserId, AutoMatchRequestDto dto)
+            => _autoMatchService.AutoMatchAsync(sessionId, organizerUserId, dto);
 
-            if (participantType.Equals(ParticipantTypes.Member, StringComparison.OrdinalIgnoreCase))
-            {
-                var p = session.SessionParticipants.FirstOrDefault(x => x.ParticipantId == participantId);
-                if (p == null) return (false, "Participant not found.");
-                
-                if (p.Status == 1) wasActive = true;
-                p.Status = 3; // 3 = Removed/Cancelled
-                p.CheckoutTime = DateTime.UtcNow; // Mark timestamp
+        public Task<(bool Success, string ErrorMessage)> SwapPlayersAsync(int sessionId, int organizerUserId, SwapPlayersRequestDto dto)
+            => _autoMatchService.SwapPlayersAsync(sessionId, organizerUserId, dto);
 
-                // แจ้งเตือนผู้เล่นที่ถูกลบ
-                await _notificationService.SendNotificationAsync(
-                    p.UserId,
-                    "คุณถูกนำออกจากก๊วน",
-                    $"คุณถูกนำออกจากก๊วน '{session.GroupName}' โดยผู้จัด",
-                    "REMOVED_FROM_SESSION",
-                    sessionId);
-            }
-            else if (participantType.Equals(ParticipantTypes.Guest, StringComparison.OrdinalIgnoreCase))
-            {
-                var g = session.SessionWalkinGuests.FirstOrDefault(x => x.WalkinId == participantId);
-                if (g == null) return (false, "Guest not found.");
+        public Task<(bool Success, string ErrorMessage)> AssignReserveToCourtAsync(int sessionId, int organizerUserId, AssignReserveRequestDto dto)
+            => _autoMatchService.AssignReserveToCourtAsync(sessionId, organizerUserId, dto);
 
-                if (g.Status == 1) wasActive = true;
-                g.Status = 3; // 3 = Removed/Cancelled
-                g.CheckoutTime = DateTime.UtcNow;
-            }
-            else
-            {
-                return (false, "Invalid participant type.");
-            }
-
-            // --- REMOVED: Auto-promote logic ---
-            // ไม่ต้องเลื่อนตัวสำรองขึ้นมาอัตโนมัติ ให้ผู้จัดเลือกเอง
-
-            await _context.SaveChangesAsync();
-            return (true, "Participant removed successfully.");
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> PromoteWaitlistedParticipantAsync(int sessionId, string participantType, int participantId, int organizerUserId)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants)
-                .Include(s => s.SessionWalkinGuests)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return (false, "Session not found or permission denied.");
-
-            // ตรวจสอบว่าก๊วนเต็มหรือยัง
-            int currentCount = session.SessionParticipants.Count(p => p.Status == 1) + 
-                               session.SessionWalkinGuests.Count(g => g.Status == 1);
-            
-            if (currentCount >= session.MaxParticipants)
-            {
-                return (false, "Session is full. Cannot promote participant.");
-            }
-
-            if (participantType.Equals("member", StringComparison.OrdinalIgnoreCase))
-            {
-                var p = session.SessionParticipants.FirstOrDefault(x => x.ParticipantId == participantId);
-                if (p == null) return (false, "Participant not found.");
-                if (p.Status != 2) return (false, "Participant is not in waitlist.");
-                p.Status = 1; // Promote to Joined
-
-                // แจ้งเตือนผู้เล่นที่ได้รับการเลื่อนสถานะ
-                await _notificationService.SendNotificationAsync(
-                    p.UserId,
-                    "คุณได้เป็นผู้เล่นตัวจริงแล้ว!",
-                    $"คุณได้รับการเลื่อนสถานะเป็นผู้เล่นตัวจริงในก๊วน '{session.GroupName}'",
-                    "PROMOTED_TO_ACTIVE",
-                    sessionId
-                );
-            }
-            else if (participantType.Equals("guest", StringComparison.OrdinalIgnoreCase))
-            {
-                var g = session.SessionWalkinGuests.FirstOrDefault(x => x.WalkinId == participantId);
-                if (g == null) return (false, "Guest not found.");
-                if (g.Status != 2) return (false, "Guest is not in waitlist.");
-                g.Status = 1; // Promote to Joined
-            }
-            else
-            {
-                return (false, "Invalid participant type.");
-            }
-
-            await _context.SaveChangesAsync();
-            return (true, "Participant promoted successfully.");
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> AutoMatchAsync(int sessionId, int organizerUserId, AutoMatchRequestDto dto)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.SessionParticipants).ThenInclude(p => p.User.UserProfile)
-                .Include(s => s.SessionParticipants).ThenInclude(p => p.SkillLevel)
-                .Include(s => s.SessionWalkinGuests).ThenInclude(g => g.SkillLevel)
-                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return (false, "Session not found.");
-            if (session.Status != 2) return (false, "Competition has not started yet.");
-
-            // 1. หาผู้เล่นที่ "ไม่ว่าง" (เล่นอยู่ หรือ อยู่ใน Staged Match)
-            // Status 4 = Staged, 1 = Playing (แก้ไขจาก 0 เป็น 4)
-            var busyUserIds = new HashSet<int>();
-            var busyWalkinIds = new HashSet<int>();
-            var activeMatches = session.Matches.Where(m => m.Status == 4 || m.Status == 1).ToList();
-
-            foreach (var match in activeMatches)
-            {
-                foreach (var p in match.MatchPlayers)
-                {
-                    if (p.UserId.HasValue) busyUserIds.Add(p.UserId.Value);
-                    if (p.WalkinId.HasValue) busyWalkinIds.Add(p.WalkinId.Value);
-                }
-            }
-
-            // 2. รวบรวมผู้เล่นที่ "ว่าง" และ "พร้อม" (Status = 1 Joined และ Check-in แล้ว)
-            var availablePlayers = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-
-            // Helper เช็ค Excluded (Paused/Ended)
-            // FIX: เปรียบเทียบแบบ Case-Insensitive เพื่อความชัวร์
-            bool IsExcluded(string type, int id) 
-            {
-                var targetId = $"{type}_{id}";
-                return dto.ExcludedPlayerIds.Any(ex => string.Equals(ex, targetId, StringComparison.OrdinalIgnoreCase));
-            }
-
-            // สมาชิก
-            foreach (var p in session.SessionParticipants.Where(p => p.Status == 1))
-            {
-                // FIX: กรองเฉพาะคนที่ Check-in แล้ว และยังไม่ได้ Checkout ออกไป
-                if (p.CheckinTime == null || p.CheckoutTime != null) continue;
-
-                if (busyUserIds.Contains(p.UserId) || IsExcluded("Member", p.ParticipantId)) continue;
-                
-                // คำนวณ Games Played และ Waiting Time
-                var playedMatches = session.Matches.Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == p.UserId)).OrderByDescending(m => m.EndTime).ToList();
-                int gamesPlayed = playedMatches.Count;
-                DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? p.CheckinTime ?? DateTime.UtcNow;
-
-                // ใช้ LevelRank แทน SkillLevelId เพื่อให้การคำนวณฝีมือสมเหตุสมผล
-                int skillRank = p.SkillLevel != null ? (int)p.SkillLevel.LevelRank : 0;
-                availablePlayers.Add((p.ParticipantId, "Member", p.UserId, null, skillRank, gamesPlayed, waitingSince));
-            }
-
-            // Walk-in
-            foreach (var g in session.SessionWalkinGuests.Where(g => g.Status == 1))
-            {
-                // FIX: กรองเฉพาะคนที่ Check-in แล้ว และยังไม่ได้ Checkout ออกไป
-                if (g.CheckinTime == null || g.CheckoutTime != null) continue;
-
-                if (busyWalkinIds.Contains(g.WalkinId) || IsExcluded("Guest", g.WalkinId)) continue;
-
-                var playedMatches = session.Matches.Where(m => m.Status == 2 && m.MatchPlayers.Any(mp => mp.WalkinId == g.WalkinId)).OrderByDescending(m => m.EndTime).ToList();
-                int gamesPlayed = playedMatches.Count;
-                DateTime waitingSince = playedMatches.FirstOrDefault()?.EndTime ?? g.CheckinTime ?? DateTime.UtcNow;
-
-                int skillRank = g.SkillLevel != null ? (int)g.SkillLevel.LevelRank : 0;
-                availablePlayers.Add((g.WalkinId, "Guest", null, g.WalkinId, skillRank, gamesPlayed, waitingSince));
-            }
-
-            if (availablePlayers.Count < 4) return (false, "Not enough players available (need 4).");
-
-            // 3. เรียงลำดับพื้นฐาน (Games น้อยสุด -> รอนานสุด) เพื่อหาคนที่มีสิทธิ์ลงสนามมากที่สุด
-            var baseSortedPlayers = availablePlayers
-                .OrderBy(p => p.Games)
-                .ThenBy(p => p.Wait)
-                .ToList();
-
-            var selectedPlayers = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-
-            // --- NEW: Logic for pairing with variety and skill ---
-
-            Func<int?, int?, string> getPlayerIdentifier = (userId, walkinId) => userId.HasValue ? $"u_{userId.Value}" : $"w_{walkinId.Value}";
-            Func<string, string, string> getPairKey = (id1, id2) => string.Compare(id1, id2) < 0 ? $"{id1}|{id2}" : $"{id2}|{id1}";
-
-            // ดึงประวัติการเล่นทั้งหมดใน Session นี้ล่วงหน้า เพื่อใช้คำนวณความหลากหลาย
-            var matchHistoryGroups = await _context.MatchPlayers
-                .Where(mp => mp.Match.SessionId == sessionId && mp.Match.Status == 2)
-                .GroupBy(mp => mp.MatchId)
-                .Select(g => g.Select(p => new { p.Team, p.UserId, p.WalkinId }).ToList())
-                .ToListAsync();
-
-            var teammateHistory = new Dictionary<string, int>();
-            var opponentHistory = new Dictionary<string, int>();
-            var matchTogetherHistory = new Dictionary<string, int>(); // เคยลงสนามพร้อมกัน
-
-            foreach (var group in matchHistoryGroups)
-            {
-                for (int i = 0; i < group.Count; i++)
-                {
-                    for (int j = i + 1; j < group.Count; j++)
-                    {
-                        var player1InHistory = group[i];
-                        var player2InHistory = group[j];
-                        var p1_id = getPlayerIdentifier(player1InHistory.UserId, player1InHistory.WalkinId);
-                        var p2_id = getPlayerIdentifier(player2InHistory.UserId, player2InHistory.WalkinId);
-                        var pairKey = getPairKey(p1_id, p2_id);
-
-                        matchTogetherHistory[pairKey] = matchTogetherHistory.GetValueOrDefault(pairKey, 0) + 1;
-
-                        if (player1InHistory.Team == player2InHistory.Team)
-                        {
-                            teammateHistory[pairKey] = teammateHistory.GetValueOrDefault(pairKey, 0) + 1;
-                        }
-                        else
-                        {
-                            opponentHistory[pairKey] = opponentHistory.GetValueOrDefault(pairKey, 0) + 1;
-                        }
-                    }
-                }
-            }
-
-            // 1. เลือกคนแรก (คนที่รอนานที่สุด/เกมน้อยที่สุด)
-            var firstPlayer = baseSortedPlayers.First();
-            selectedPlayers.Add(firstPlayer);
-
-            var remainingPool = baseSortedPlayers.Skip(1).ToList();
-
-            // 2. เลือกอีก 3 คน ตามโหมดที่เลือก โดยอิงจากคนแรก
-            for (int i = 0; i < 3; i++)
-            {
-                var bestCandidate = remainingPool
-                    .OrderBy(c => 
-                    {
-                        // 2.1 Queue Score (คิว): สำคัญที่สุด ให้คนรอนานได้ลงก่อน (บวกแต้มตามลำดับ)
-                        int queueScore = baseSortedPlayers.IndexOf(c) * 10;
-                        
-                        // 2.2 History Score (ประวัติ): พยายามหลีกเลี่ยงคนที่เคยเล่นด้วยกันแล้ว
-                        int historyCount = 0;
-                        var c_id = getPlayerIdentifier(c.UserId, c.WalkinId);
-                        foreach (var s in selectedPlayers)
-                        {
-                            var s_id = getPlayerIdentifier(s.UserId, s.WalkinId);
-                            historyCount += matchTogetherHistory.GetValueOrDefault(getPairKey(c_id, s_id), 0);
-                        }
-                        int historyScore = historyCount * 40; // Penalty หนักถ้าเคยเล่นด้วยกันแล้ว
-
-                        // 2.3 Skill Score (ระดับมือ): จัดตามโหมด
-                        int skillScore = 0;
-                        if (dto.IsMixedMode)
-                        {
-                            // โหมดผสม: ต้องการความต่างของระดับมือ (เวลสูง คู่ เวลต่ำ)
-                            if (selectedPlayers.Count == 1) 
-                            {
-                                // คนที่ 2 (ฝั่งตรงข้ามคนแรก): หาระดับมือให้ห่างจากคนแรกมากที่สุด (ติดลบ = ดึงคนเวลห่างขึ้นมา)
-                                skillScore = -Math.Abs(c.Skill - selectedPlayers[0].Skill) * 15; 
-                            }
-                            else if (selectedPlayers.Count == 2) 
-                            {
-                                // คนที่ 3 (คู่คนแรก): หาระดับมือให้ใกล้เคียงคนแรก (เพื่อให้ฝีมือแต่ละทีมสมดุล)
-                                skillScore = Math.Abs(c.Skill - selectedPlayers[0].Skill) * 20;
-                            }
-                            else 
-                            {
-                                // คนที่ 4 (คู่คนที่ 2): หาระดับมือให้ใกล้เคียงคนที่ 2
-                                skillScore = Math.Abs(c.Skill - selectedPlayers[1].Skill) * 20;
-                            }
-                        }
-                        else
-                        {
-                            // โหมดตามมือ: หาระดับมือให้ใกล้เคียงกับคนแรกมากที่สุด
-                            skillScore = Math.Abs(c.Skill - selectedPlayers[0].Skill) * 30;
-                        }
-
-                        return queueScore + historyScore + skillScore;
-                    })
-                    .First();
-
-                selectedPlayers.Add(bestCandidate);
-                remainingPool.Remove(bestCandidate);
-            }
-
-            if (selectedPlayers.Count < 4)
-            {
-                return (false, "Not enough players to form a match with the selected criteria.");
-            }
-
-            // 4. จัดทีม (Algorithm) with variety
-            var teamA = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-            var teamB = new List<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>();
-
-            var sortedSelectedPlayers = selectedPlayers.OrderBy(p => p.Skill).ToList();
-            var p1 = sortedSelectedPlayers[0]; var p2 = sortedSelectedPlayers[1]; var p3 = sortedSelectedPlayers[2]; var p4 = sortedSelectedPlayers[3];
-
-            var combinations = new List<(List<dynamic> team1, List<dynamic> team2)>
-            {
-                (new List<dynamic> { p1, p2 }, new List<dynamic> { p3, p4 }),
-                (new List<dynamic> { p1, p3 }, new List<dynamic> { p2, p4 }),
-                (new List<dynamic> { p1, p4 }, new List<dynamic> { p2, p3 })
-            };
-
-            var scoredCombinations = combinations.Select(combo =>
-            {
-                var typedTeamA = combo.team1.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
-                var typedTeamB = combo.team2.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
-
-                double balanceScore = Math.Abs(typedTeamA.Sum(pl => pl.Skill) - typedTeamB.Sum(pl => pl.Skill));
-                int historyScore = 0;
-
-                var tA_p1_id = getPlayerIdentifier(typedTeamA[0].UserId, typedTeamA[0].WalkinId);
-                var tA_p2_id = getPlayerIdentifier(typedTeamA[1].UserId, typedTeamA[1].WalkinId);
-                historyScore += teammateHistory.GetValueOrDefault(getPairKey(tA_p1_id, tA_p2_id), 0) * 2; // ให้ความสำคัญกับการไม่คู่ซ้ำ
-
-                var tB_p1_id = getPlayerIdentifier(typedTeamB[0].UserId, typedTeamB[0].WalkinId);
-                var tB_p2_id = getPlayerIdentifier(typedTeamB[1].UserId, typedTeamB[1].WalkinId);
-                historyScore += teammateHistory.GetValueOrDefault(getPairKey(tB_p1_id, tB_p2_id), 0) * 2;
-
-                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p1_id, tB_p1_id), 0);
-                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p1_id, tB_p2_id), 0);
-                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p2_id, tB_p1_id), 0);
-                historyScore += opponentHistory.GetValueOrDefault(getPairKey(tA_p2_id, tB_p2_id), 0);
-
-                return new { Combination = combo, BalanceScore = balanceScore, HistoryScore = historyScore };
-            }).ToList();
-
-            var bestCombination = scoredCombinations
-                .OrderBy(c => c.HistoryScore)
-                .ThenBy(c => c.BalanceScore)
-                .First();
-
-            teamA = bestCombination.Combination.team1.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
-            teamB = bestCombination.Combination.team2.Cast<(int Id, string Type, int? UserId, int? WalkinId, int Skill, int Games, DateTime Wait)>().ToList();
-            
-            // 5. หาสนามว่าง
-            // ดึงหมายเลขสนามทั้งหมดที่มี
-            var allCourts = !string.IsNullOrEmpty(session.CourtNumbers) 
-                ? session.CourtNumbers.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToList()
-                : new List<string>();
-            
-            // FIX: เพิ่ม Fallback กรณี CourtNumbers เป็นค่าว่าง ให้สร้างเลขสนามตามจำนวน NumberOfCourts
-            if (!allCourts.Any())
-            {
-                allCourts = Enumerable.Range(1, session.NumberOfCourts ?? 1).Select(i => i.ToString()).ToList();
-            }
-
-            // ดึงสนามที่ใช้อยู่
-            // FIX: นับเฉพาะสนามที่มีคนเล่น หรือมีคนรอ (ไม่นับ Ghost Match ที่ไม่มีคน)
-            var usedCourts = activeMatches
-                .Where(m => m.Status == 1 || m.MatchPlayers.Any()) 
-                .Select(m => m.CourtNumber)
-                .ToHashSet();
-            
-            string targetCourt = null;
-            foreach (var court in allCourts)
-            {
-                if (!usedCourts.Contains(court))
-                {
-                    targetCourt = court;
-                    break;
-                }
-            }
-
-            // ถ้าสนามเต็ม ให้ลงทีมสำรอง (ใช้รหัสติดลบ -1, -2)
-            if (targetCourt == null)
-            {
-                int reserveIndex = 1;
-                while (usedCourts.Contains($"-{reserveIndex}"))
-                {
-                    reserveIndex++;
-                }
-                targetCourt = $"-{reserveIndex}";
-            }
-
-            // 6. สร้าง Match (Staged) หรือใช้ Ghost Match เดิมที่ว่างอยู่
-            Match newMatch;
-            var ghostMatch = activeMatches.FirstOrDefault(m => m.CourtNumber == targetCourt && m.Status == 4 && !m.MatchPlayers.Any());
-
-            if (ghostMatch != null)
-            {
-                // Reuse แมตช์เดิม
-                newMatch = ghostMatch;
-                newMatch.CreatedDate = DateTime.UtcNow; // อัปเดตเวลา
-                newMatch.MatchPlayers.Clear(); // เคลียร์ผู้เล่น (เผื่อมีขยะ)
-            }
-            else
-            {
-                // สร้างใหม่
-                newMatch = new Match
-                {
-                    SessionId = sessionId,
-                    CourtNumber = targetCourt,
-                    Status = 4, // 4 = Staged
-                    CreatedDate = DateTime.UtcNow,
-                    ShuttlecocksUsed = 0,
-                    MatchPlayers = new List<MatchPlayer>()
-                };
-                _context.Matches.Add(newMatch);
-            }
-
-            // Add Players
-            foreach (var p in teamA)
-            {
-                newMatch.MatchPlayers.Add(new MatchPlayer
-                {
-                    UserId = p.UserId, // ค่านี้ถูกต้องจาก availablePlayers แล้ว
-                    WalkinId = p.WalkinId, // ค่านี้ถูกต้องจาก availablePlayers แล้ว
-                    Team = "A"
-                });
-            }
-            foreach (var p in teamB)
-            {
-                newMatch.MatchPlayers.Add(new MatchPlayer
-                {
-                    UserId = p.UserId,
-                    WalkinId = p.WalkinId,
-                    Team = "B"
-                });
-            }
-
-            await _context.SaveChangesAsync();
-
-            await BroadcastLiveStateChange(sessionId, organizerUserId);
-            return (true, "Match created successfully.");
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> SwapPlayersAsync(int sessionId, int organizerUserId, SwapPlayersRequestDto dto)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return (false, "Session not found.");
-
-            // ดึง Staged Matches ทั้งหมด (Status 4)
-            var stagedMatches = session.Matches.Where(m => m.Status == 4).ToList();
-
-            // FIX: ต้องแปลง ParticipantId เป็น UserId สำหรับ Member ก่อนค้นหา
-            int? p1UserId = null;
-            if (string.Equals(dto.Player1.Type, "Member", StringComparison.OrdinalIgnoreCase))
-            {
-                var sp = await _context.SessionParticipants.FindAsync(dto.Player1.Id);
-                p1UserId = sp?.UserId;
-                if (p1UserId == null) return (false, "Player 1 (Member) not found.");
-            }
-
-            int? p2UserId = null;
-            if (string.Equals(dto.Player2.Type, "Member", StringComparison.OrdinalIgnoreCase))
-            {
-                var sp = await _context.SessionParticipants.FindAsync(dto.Player2.Id);
-                p2UserId = sp?.UserId;
-                if (p2UserId == null) return (false, "Player 2 (Member) not found.");
-            }
-
-            MatchPlayer? mp1 = null;
-            MatchPlayer? mp2 = null;
-            Match? match1 = null;
-            Match? match2 = null;
-
-            // ค้นหาผู้เล่นทั้งสองคนใน Staged Matches
-            foreach (var match in stagedMatches)
-            {
-                var p1 = match.MatchPlayers.FirstOrDefault(p => 
-                    (string.Equals(dto.Player1.Type, "Member", StringComparison.OrdinalIgnoreCase) && p.UserId == p1UserId) || 
-                    (string.Equals(dto.Player1.Type, "Guest", StringComparison.OrdinalIgnoreCase) && p.WalkinId == dto.Player1.Id));
-                
-                if (p1 != null) { mp1 = p1; match1 = match; }
-
-                var p2 = match.MatchPlayers.FirstOrDefault(p => 
-                    (string.Equals(dto.Player2.Type, "Member", StringComparison.OrdinalIgnoreCase) && p.UserId == p2UserId) || 
-                    (string.Equals(dto.Player2.Type, "Guest", StringComparison.OrdinalIgnoreCase) && p.WalkinId == dto.Player2.Id));
-                
-                if (p2 != null) { mp2 = p2; match2 = match; }
-            }
-
-            if (mp1 == null || mp2 == null) return (false, "One or both players not found in staged matches.");
-
-            // สลับข้อมูล (UserId/WalkinId) ระหว่าง 2 Record
-            // หมายเหตุ: เราสลับค่า ID แทนการสลับ Object เพื่อความง่ายในการจัดการ EF Core Tracking
-            var tempUserId = mp1.UserId;
-            var tempWalkinId = mp1.WalkinId;
-
-            mp1.UserId = mp2.UserId;
-            mp1.WalkinId = mp2.WalkinId;
-
-            mp2.UserId = tempUserId;
-            mp2.WalkinId = tempWalkinId;
-
-            await _context.SaveChangesAsync();
-            await BroadcastLiveStateChange(sessionId, organizerUserId);
-            return (true, "Players swapped successfully.");
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> AssignReserveToCourtAsync(int sessionId, int organizerUserId, AssignReserveRequestDto dto)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return (false, "Session not found.");
-
-            // 1. หา Staged Match ของสนามเป้าหมาย (ถ้ามี) หรือเตรียมสร้างใหม่
-            var targetMatch = session.Matches.FirstOrDefault(m => m.Status == 4 && m.CourtNumber == dto.TargetCourtIdentifier);
-            
-            // ถ้าสนามไม่ว่าง (มีคนยืนอยู่) ให้เคลียร์คนออกก่อน (ตาม Logic เดิมคือแทนที่)
-            if (targetMatch != null)
-            {
-                _context.MatchPlayers.RemoveRange(targetMatch.MatchPlayers);
-                targetMatch.MatchPlayers.Clear();
-            }
-            else
-            {
-                targetMatch = new Match
-                {
-                    SessionId = sessionId,
-                    CourtNumber = dto.TargetCourtIdentifier,
-                    Status = 4, // FIX: 4 = Staged
-                    CreatedDate = DateTime.UtcNow,
-                    MatchPlayers = new List<MatchPlayer>()
-                };
-                _context.Matches.Add(targetMatch);
-            }
-
-            // 2. หา Reserve Team ที่เหมาะสม
-            Match? reserveMatch = null;
-            var reserveMatches = session.Matches
-                .Where(m => m.Status == 4 && m.CourtNumber != null && m.CourtNumber.StartsWith("-"))
-                .ToList();
-
-            if (dto.IsQueueMode)
-            {
-                // โหมดคิว: เอาทีมสำรองทีมแรกที่ "พร้อม" (มีคน)
-                // เรียงตามลำดับเลขลบ (เช่น -1, -2, -3) -> -1 มาก่อน
-                reserveMatch = reserveMatches
-                    .Where(m => m.MatchPlayers.Any()) // ต้องมีคน
-                    .OrderByDescending(m => int.Parse(m.CourtNumber!)) // -1 > -2
-                    .FirstOrDefault();
-            }
-            else
-            {
-                // โหมดสนาม: เอาทีมสำรองที่เลขตรงกับสนาม (เช่น สนาม 1 -> สำรอง -1)
-                // สมมติ Logic: Court "1" maps to Reserve "-1"
-                if (int.TryParse(dto.TargetCourtIdentifier, out int courtNum))
-                {
-                    string targetReserveId = $"-{courtNum}";
-                    reserveMatch = reserveMatches.FirstOrDefault(m => m.CourtNumber == targetReserveId);
-                }
-            }
-
-            if (reserveMatch == null || !reserveMatch.MatchPlayers.Any())
-            {
-                return (false, "No suitable reserve team found.");
-            }
-
-            // 3. ย้ายผู้เล่นจาก Reserve -> Target
-            foreach (var p in reserveMatch.MatchPlayers)
-            {
-                targetMatch.MatchPlayers.Add(new MatchPlayer
-                {
-                    UserId = p.UserId,
-                    WalkinId = p.WalkinId,
-                    Team = p.Team
-                });
-            }
-
-            // 4. ลบผู้เล่นออกจาก Reserve (เคลียร์ทีมสำรอง)
-            _context.MatchPlayers.RemoveRange(reserveMatch.MatchPlayers);
-            
-            // หรือถ้าต้องการลบ Match สำรองทิ้งไปเลยก็ได้ แต่ในที่นี้แค่เคลียร์คนออกเพื่อให้ทีมว่าง
-            // _context.Matches.Remove(reserveMatch); 
-
-            await _context.SaveChangesAsync();
-            await BroadcastLiveStateChange(sessionId, organizerUserId);
-            return (true, "Reserve team assigned to court successfully.");
-        }
-
-        public async Task<(bool Success, string ErrorMessage)> MovePlayersAsync(int sessionId, int organizerUserId, MovePlayersRequestDto dto)
-        {
-            var session = await _context.GameSessions
-                .Include(s => s.Matches).ThenInclude(m => m.MatchPlayers)
-                .FirstOrDefaultAsync(s => s.SessionId == sessionId && s.CreatedByUserId == organizerUserId);
-
-            if (session == null) return (false, "Session not found.");
-
-            // 1. หา Staged Match เป้าหมาย (Target)
-            var targetMatch = session.Matches.FirstOrDefault(m => m.Status == 4 && m.CourtNumber == dto.TargetCourtIdentifier);
-            if (targetMatch == null)
-            {
-                // ถ้ายังไม่มี ให้สร้างใหม่
-                targetMatch = new Match
-                {
-                    SessionId = sessionId,
-                    CourtNumber = dto.TargetCourtIdentifier,
-                    Status = 4, // FIX: 4 = Staged
-                    CreatedDate = DateTime.UtcNow,
-                    MatchPlayers = new List<MatchPlayer>()
-                };
-                _context.Matches.Add(targetMatch);
-            }
-
-            // 2. วนลูปย้ายผู้เล่นทีละคน
-            foreach (var playerDto in dto.Players)
-            {
-                // FIX: แปลง ParticipantId เป็น UserId สำหรับ Member
-                int? userId = null;
-                int? walkinId = null;
-                bool isMember = string.Equals(playerDto.Type, "Member", StringComparison.OrdinalIgnoreCase);
-
-                if (isMember)
-                {
-                    var sp = await _context.SessionParticipants.FindAsync(playerDto.Id);
-                    userId = sp?.UserId;
-                    if (userId == null) continue; // ข้ามถ้าหา Member ไม่เจอ
-                }
-                else
-                {
-                    walkinId = playerDto.Id;
-                }
-
-                // 2.1 ตรวจสอบว่าผู้เล่นอยู่ในเป้าหมายแล้วหรือยัง
-                bool alreadyInTarget = targetMatch.MatchPlayers.Any(p =>
-                    (isMember && p.UserId == userId) ||
-                    (!isMember && p.WalkinId == walkinId));
-                
-                if (alreadyInTarget) continue;
-
-                // 2.2 ลบผู้เล่นออกจากที่เดิม (Staged Match อื่นๆ)
-                var existingEntry = session.Matches
-                    .Where(m => m.Status == 4) // หาเฉพาะใน Staged (Status 4)
-                    .SelectMany(m => m.MatchPlayers)
-                    .FirstOrDefault(p =>
-                        (isMember && p.UserId == userId) ||
-                        (!isMember && p.WalkinId == walkinId));
-
-                if (existingEntry != null)
-                {
-                    _context.MatchPlayers.Remove(existingEntry);
-                    
-                    // --- FIX: ลบออกจาก List ในหน่วยความจำด้วย เพื่อให้ Count อัปเดตทันที ---
-                    var parentMatch = session.Matches.FirstOrDefault(m => m.MatchId == existingEntry.MatchId);
-                    if (parentMatch != null)
-                    {
-                        parentMatch.MatchPlayers.Remove(existingEntry);
-                    }
-                }
-
-                // 2.3 เพิ่มผู้เล่นไปยังเป้าหมาย (ถ้ายังไม่เต็ม 4 คน)
-                if (targetMatch.MatchPlayers.Count < 4)
-                {
-                    // กำหนดทีม A หรือ B ตามจำนวนคนที่มีอยู่
-                    string team = targetMatch.MatchPlayers.Count < 2 ? "A" : "B";
-                    
-                    targetMatch.MatchPlayers.Add(new MatchPlayer
-                    {
-                        UserId = userId,
-                        WalkinId = walkinId,
-                        Team = team
-                    });
-                }
-                else
-                {
-                    // ถ้าเป้าหมายเต็มแล้ว ผู้เล่นจะถูกลบจากที่เดิมแต่ไม่เข้าที่ใหม่ 
-                    // (เท่ากับกลับไป Waiting List โดยอัตโนมัติ)
-                }
-            }
-
-            // ลบ Match ที่ว่างเปล่าทิ้ง (Cleanup)
-            var emptyMatches = session.Matches.Where(m => m.Status == 4 && !m.MatchPlayers.Any() && m.MatchId != targetMatch.MatchId).ToList();
-            _context.Matches.RemoveRange(emptyMatches);
-
-            await _context.SaveChangesAsync();
-            await BroadcastLiveStateChange(sessionId, organizerUserId);
-            return (true, "Players moved successfully.");
-        }
-
-        private async Task BroadcastLiveStateChange(int sessionId, int organizerUserId)
-        {
-            var liveState = await _matchManagementService.GetLiveStateAsync(sessionId, organizerUserId);
-            if (liveState != null)
-            {
-                await _hubContext.Clients.Group($"session-{sessionId}").SendAsync("ReceiveLiveStateUpdate", liveState);
-            }
-        }
+        public Task<(bool Success, string ErrorMessage)> MovePlayersAsync(int sessionId, int organizerUserId, MovePlayersRequestDto dto)
+            => _autoMatchService.MovePlayersAsync(sessionId, organizerUserId, dto);
     }
 }

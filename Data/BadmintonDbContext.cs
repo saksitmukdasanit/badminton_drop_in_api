@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +38,10 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<OrganizerProfile> OrganizerProfiles { get; set; }
 
+    public virtual DbSet<OrganizerAutoMatchPreset> OrganizerAutoMatchPresets { get; set; }
+
+    public virtual DbSet<OrganizerRecurringGameTemplate> OrganizerRecurringGameTemplates { get; set; }
+
     public virtual DbSet<UserOrganizerSkill> UserOrganizerSkills { get; set; }
 
     public virtual DbSet<OrganizerSkillLevel> OrganizerSkillLevels { get; set; }
@@ -71,6 +75,10 @@ public partial class BadmintonDbContext : DbContext
     public virtual DbSet<UserWallet> UserWallets { get; set; }
 
     public virtual DbSet<WalletTransaction> WalletTransactions { get; set; }
+
+    public virtual DbSet<UserReport> UserReports { get; set; }
+
+    public virtual DbSet<UserBlock> UserBlocks { get; set; }
 
     public virtual DbSet<UserFcmToken> UserFcmTokens { get; set; }
 
@@ -667,6 +675,102 @@ public partial class BadmintonDbContext : DbContext
                 .HasForeignKey(d => d.UserId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_UserFcmTokens_UserID");
+        });
+
+        modelBuilder.Entity<OrganizerAutoMatchPreset>(entity =>
+        {
+            entity.HasKey(e => e.UserId).HasName("OrganizerAutoMatchPresets_pkey");
+            entity.ToTable("OrganizerAutoMatchPresets");
+
+            entity.Property(e => e.UserId).ValueGeneratedNever().HasColumnName("UserID");
+            entity.Property(e => e.QueuePositionMultiplier).HasDefaultValue(10);
+            entity.Property(e => e.MatchTogetherPenaltyPerOccurrence).HasDefaultValue(40);
+            entity.Property(e => e.MixedModeOppositeSkillMultiplier).HasDefaultValue(15);
+            entity.Property(e => e.MixedModeTeammateSkillMultiplier).HasDefaultValue(20);
+            entity.Property(e => e.SameLevelSkillMultiplier).HasDefaultValue(30);
+            entity.Property(e => e.TeamFormationTeammateHistoryMultiplier).HasDefaultValue(2);
+            entity.Property(e => e.TeamFormationOpponentHistoryMultiplier).HasDefaultValue(1);
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.User)
+                .WithOne()
+                .HasForeignKey<OrganizerAutoMatchPreset>(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_OrganizerAutoMatchPresets_UserID");
+        });
+
+        modelBuilder.Entity<OrganizerRecurringGameTemplate>(entity =>
+        {
+            entity.ToTable("OrganizerRecurringGameTemplates");
+            entity.HasKey(e => e.RecurringTemplateId).HasName("OrganizerRecurringGameTemplates_pkey");
+
+            entity.Property(e => e.RecurringTemplateId).HasColumnName("RecurringTemplateID");
+            entity.Property(e => e.CreatedByUserId).HasColumnName("CreatedByUserID");
+            entity.Property(e => e.DaysOfWeekMask).HasColumnName("DaysOfWeekMask");
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.GroupName).HasMaxLength(255);
+            entity.Property(e => e.GooglePlaceId).HasMaxLength(128).HasColumnName("GooglePlaceID");
+            entity.Property(e => e.VenueNameSnapshot).HasMaxLength(255);
+            entity.Property(e => e.AddressSnapshot).HasMaxLength(500);
+            entity.Property(e => e.Latitude).HasPrecision(10, 7);
+            entity.Property(e => e.Longitude).HasPrecision(10, 7);
+            entity.Property(e => e.GameTypeId).HasColumnName("GameTypeID");
+            entity.Property(e => e.PairingMethodId).HasColumnName("PairingMethodID");
+            entity.Property(e => e.CourtFeePerPerson).HasPrecision(10, 2);
+            entity.Property(e => e.ShuttlecockFeePerPerson).HasPrecision(10, 2);
+            entity.Property(e => e.TotalCourtCost).HasPrecision(10, 2);
+            entity.Property(e => e.ShuttlecockCostPerUnit).HasPrecision(10, 2);
+            entity.Property(e => e.ShuttlecockModelId).HasColumnName("ShuttlecockModelID");
+            entity.Property(e => e.CourtNumbers).HasMaxLength(100);
+            entity.Property(e => e.FacilityIdsCsv).HasMaxLength(500);
+            entity.Property(e => e.CreatedDate).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.CreatedByUser)
+                .WithMany()
+                .HasForeignKey(d => d.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_OrganizerRecurringGameTemplates_UserID");
+        });
+
+        modelBuilder.Entity<UserReport>(entity =>
+        {
+            entity.HasKey(e => e.ReportId);
+            entity.ToTable("UserReports");
+            entity.Property(e => e.Reason).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasIndex(e => new { e.ReportedUserId, e.CreatedAt });
+
+            entity.HasOne(e => e.Reporter)
+                .WithMany()
+                .HasForeignKey(e => e.ReporterUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Reported)
+                .WithMany()
+                .HasForeignKey(e => e.ReportedUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserBlock>(entity =>
+        {
+            entity.HasKey(e => e.BlockId);
+            entity.ToTable("UserBlocks");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasIndex(e => new { e.BlockerUserId, e.BlockedUserId }).IsUnique();
+            entity.HasIndex(e => e.BlockerUserId);
+            entity.HasIndex(e => e.BlockedUserId);
+
+            entity.HasOne(e => e.Blocker)
+                .WithMany()
+                .HasForeignKey(e => e.BlockerUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Blocked)
+                .WithMany()
+                .HasForeignKey(e => e.BlockedUserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         OnModelCreatingPartial(modelBuilder);

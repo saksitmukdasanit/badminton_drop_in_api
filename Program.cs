@@ -95,8 +95,12 @@ builder.Services.AddHttpClient(); // เพิ่มบรรทัดนี้�
 builder.Services.AddControllers();
 
 
+builder.Services.AddSingleton<DropInBadAPI.Modules.Auth.IPasswordHasher, DropInBadAPI.Modules.Auth.PasswordHasher>();
+builder.Services.AddSingleton<DropInBadAPI.Modules.Auth.IGoogleTokenVerifier, DropInBadAPI.Modules.Auth.GoogleTokenVerifier>();
+builder.Services.AddSingleton<DropInBadAPI.Modules.Auth.IAppleTokenVerifier, DropInBadAPI.Modules.Auth.AppleTokenVerifier>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.UserSafety.IUserSafetyService, DropInBadAPI.Modules.UserSafety.UserSafetyService>();
 
 builder.Services.AddScoped(typeof(IGenericService<>), typeof(GenericService<>));
 builder.Services.AddScoped<IDropdownService, DropdownService>();
@@ -105,7 +109,13 @@ builder.Services.AddScoped<IDropdownService, DropdownService>();
 builder.Services.AddScoped<IOrganizerService, OrganizerService>();
 builder.Services.AddScoped<IOrganizerSkillLevelService, OrganizerSkillLevelService>();
 
+builder.Services.AddScoped<IGameSessionBillingService, GameSessionBillingService>();
+builder.Services.AddScoped<IGameSessionBookingService, GameSessionBookingService>();
+builder.Services.AddScoped<IAutoMatchService, AutoMatchService>();
+builder.Services.AddScoped<IAutoMatchPresetService, AutoMatchPresetService>();
 builder.Services.AddScoped<IGameSessionService, GameSessionService>();
+builder.Services.AddScoped<IRecurringGameTemplateService, RecurringGameTemplateService>();
+builder.Services.AddHostedService<RecurringSessionGenerationHostedService>();
 builder.Services.AddScoped<IMatchManagementService, MatchManagementService>();
 builder.Services.AddScoped<IMatchRecommenderService, MatchRecommenderService>();
 builder.Services.AddScoped<IProfileService, ProfileService>();
@@ -161,10 +171,12 @@ builder.Services.AddAuthorization();
 var firebaseConfigPath = Path.Combine(AppContext.BaseDirectory, "firebase-adminsdk.json");
 if (File.Exists(firebaseConfigPath))
 {
+#pragma warning disable CS0618 // GoogleCredential.FromFile — รอขึ้น credential factory ในทีหลัง
     FirebaseApp.Create(new AppOptions()
     {
         Credential = GoogleCredential.FromFile(firebaseConfigPath),
     });
+#pragma warning restore CS0618
     Console.WriteLine("Firebase Admin SDK Initialized.");
 }
 else

@@ -1,3 +1,4 @@
+using DropInBadAPI.Constants;
 using DropInBadAPI.Data;
 using DropInBadAPI.Dtos;
 using DropInBadAPI.Hubs;
@@ -107,16 +108,19 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var rawData = await query.Select(s => new
                 {
                     SessionId = s.SessionId,
+                    SessionPublicId = s.SessionPublicId,
                     GroupName = s.GroupName,
                     ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
                     SessionDate = s.SessionDate,
                     StartTime = s.StartTime,
                     EndTime = s.EndTime,
-                    CourtName = s.Venue != null ? s.Venue.VenueName : null,
+                    CourtName = s.Venue != null ? s.Venue.VenueName ?? "" : "",
                     Location = s.Venue != null ? s.Venue.Address : null,
+                    Latitude = s.Venue != null ? s.Venue.Latitude : null,
+                    Longitude = s.Venue != null ? s.Venue.Longitude : null,
                     CourtFeePerPerson = s.CourtFeePerPerson,
                     ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson,
-                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname : "N/A",
+                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname ?? "N/A" : "N/A",
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
@@ -144,6 +148,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             // 5. นำข้อมูลที่ดึงมาแล้ว (เพียง 10 แถว) มาแปลง Format (ToString)
             var result = rawData.Select(s => new UpcomingSessionCardDto
                 {
+                    SessionPublicId = s.SessionPublicId,
                     SessionId = s.SessionId,
                     GroupName = s.GroupName,
                     ImageUrl = s.ImageUrl,
@@ -152,8 +157,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     StartTime = s.StartTime.ToString("HH:mm"),
                     EndTime = s.EndTime.ToString("HH:mm"),
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                    CourtName = s.CourtName,
+                    CourtName = s.CourtName ?? "",
                     Location = s.Location,
+                    Latitude = s.Latitude,
+                    Longitude = s.Longitude,
                     Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue)
                           ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท" : "สอบถามผู้จัด",
                     OrganizerName = s.OrganizerName,
@@ -175,6 +182,74 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 }).ToList();
 
             return result;
+        }
+
+        public async Task<UpcomingSessionCardDto?> GetSessionCardByPublicIdAsync(Guid sessionPublicId, int? currentUserId)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var thaiCulture = new CultureInfo("th-TH");
+            var userBookmarks = new HashSet<int>();
+            if (currentUserId.HasValue)
+            {
+                userBookmarks = await _context.UserBookmarkedSessions
+                    .Where(b => b.UserId == currentUserId.Value)
+                    .Select(b => b.SessionId)
+                    .ToHashSetAsync();
+            }
+
+            var s = await _context.GameSessions
+                .Where(x => x.SessionPublicId == sessionPublicId && x.SessionDate >= today && x.Status == 1)
+                .Include(x => x.Venue)
+                .Include(x => x.GameSessionPhotos)
+                .Include(x => x.CreatedByUser).ThenInclude(u => u.UserProfile)
+                .Include(x => x.SessionParticipants)
+                .Include(x => x.SessionWalkinGuests)
+                .Include(x => x.GameType)
+                .Include(x => x.ShuttlecockModel).ThenInclude(m => m!.Brand)
+                .FirstOrDefaultAsync();
+
+            if (s == null) return null;
+
+            return new UpcomingSessionCardDto
+            {
+                SessionPublicId = s.SessionPublicId,
+                SessionId = s.SessionId,
+                GroupName = s.GroupName,
+                ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
+                DayOfWeek = s.SessionDate.ToDateTime(TimeOnly.MinValue).ToString("dddd", thaiCulture),
+                SessionDate = s.SessionDate.ToString("dd/MM/yyyy", thaiCulture),
+                StartTime = s.StartTime.ToString("HH:mm"),
+                EndTime = s.EndTime.ToString("HH:mm"),
+                SessionStart = s.SessionDate.ToDateTime(s.StartTime),
+                CourtName = s.Venue != null ? s.Venue.VenueName ?? "" : "",
+                Location = s.Venue != null ? s.Venue.Address : null,
+                Latitude = s.Venue != null ? s.Venue.Latitude : null,
+                Longitude = s.Venue != null ? s.Venue.Longitude : null,
+                Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue) ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท" : "สอบถามผู้จัด",
+                OrganizerName = s.CreatedByUser?.UserProfile?.Nickname ?? "N/A",
+                OrganizerImageUrl = s.CreatedByUser?.UserProfile?.ProfilePhotoUrl,
+                IsBookmarked = userBookmarks.Contains(s.SessionId),
+                MaxParticipants = s.MaxParticipants,
+                CurrentParticipants = s.SessionParticipants.Count(p => p.Status == 1 || p.Status == null) + s.SessionWalkinGuests.Count(g => g.Status == 1 || g.Status == null),
+                GameTypeName = s.GameType?.TypeName,
+                ShuttlecockBrandName = s.ShuttlecockModel?.Brand?.BrandName,
+                ShuttlecockModelName = s.ShuttlecockModel?.ModelName,
+                CourtImageUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
+                Status = s.Status,
+                CourtNumbers = s.CourtNumbers,
+                Notes = s.Notes,
+                CourtFeePerPerson = s.CourtFeePerPerson?.ToString(),
+                ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson?.ToString(),
+                CostingMethod = s.CostingMethod,
+                UserStatus = currentUserId.HasValue
+                    ? s.SessionParticipants
+                        .Where(p => p.UserId == currentUserId.Value)
+                        .Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined")
+                                  : p.Status == 2 ? "Waitlisted"
+                                  : "NotJoined")
+                        .FirstOrDefault() ?? "NotJoined"
+                    : "NotJoined"
+            };
         }
 
         public async Task<IEnumerable<UpcomingSessionCardDto>> GetBookmarkedSessionsAsync(int userId)
@@ -202,6 +277,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             return sessions.Select(s => new UpcomingSessionCardDto
             {
+                SessionPublicId = s.SessionPublicId,
                 SessionId = s.SessionId,
                 GroupName = s.GroupName,
                 ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -210,8 +286,10 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 StartTime = s.StartTime.ToString("HH:mm"),
                 EndTime = s.EndTime.ToString("HH:mm"),
                 SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                CourtName = s.Venue != null ? s.Venue.VenueName : null,
+                CourtName = s.Venue != null ? s.Venue.VenueName ?? "" : "",
                 Location = s.Venue != null ? s.Venue.Address : null,
+                Latitude = s.Venue != null ? s.Venue.Latitude : null,
+                Longitude = s.Venue != null ? s.Venue.Longitude : null,
                 Price = (s.CourtFeePerPerson.HasValue || s.ShuttlecockFeePerPerson.HasValue) ? $"{(s.CourtFeePerPerson ?? 0) + (s.ShuttlecockFeePerPerson ?? 0):N0} บาท" : "สอบถามผู้จัด",
                 OrganizerName = s.CreatedByUser?.UserProfile?.Nickname ?? "N/A",
                 OrganizerImageUrl = s.CreatedByUser?.UserProfile?.ProfilePhotoUrl,
@@ -225,8 +303,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 Status = s.Status,
                 CourtNumbers = s.CourtNumbers,
                 Notes = s.Notes,
-                CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
-                ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
+                CourtFeePerPerson = s.CourtFeePerPerson?.ToString(),
+                ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson?.ToString(),
                 CostingMethod = s.CostingMethod,
                 UserStatus = s.SessionParticipants.Where(p => p.UserId == userId).Select(p => p.Status == 1 ? (p.CheckinTime != null ? "CheckedIn" : "Joined") : p.Status == 2 ? "Waitlisted" : p.Status == 3 ? "Refund" : "NotJoined").FirstOrDefault() ?? "NotJoined"
             }).ToList();
@@ -266,11 +344,12 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var dtos = sessions.Select(s => {
                 // หาสถานะเฉพาะของ User คนนี้ในก๊วนนั้นๆ
                 var userParticipation = s.SessionParticipants.FirstOrDefault(p => p.UserId == userId);
-                string userStatusStr = userParticipation?.Status switch
+                string userStatusStr = userParticipation switch
                 {
-                    1 => userParticipation.CheckoutTime != null ? "CheckedOut" : (userParticipation.CheckinTime != null ? "CheckedIn" : "Joined"), // เพิ่มการเช็ค CheckedOut
-                    2 => "Waitlisted",  // สำรอง
-                    3 => "Refund",      // ยกเลิก / รอคืนเงิน
+                    null => "NotJoined",
+                    { Status: 1 } p => p.CheckoutTime != null ? "CheckedOut" : (p.CheckinTime != null ? "CheckedIn" : "Joined"),
+                    { Status: 2 } => "Waitlisted",
+                    { Status: 3 } => "Refund",
                     _ => "NotJoined"
                 };
                 
@@ -299,11 +378,12 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     bool hasPendingBill = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1);
                     bool hasUnpaidBalance = expectedTotal - paidAmount > 0.1m;
                     // FIX: แสดงสถานะค้างชำระก็ต่อเมื่อผู้เล่นทำการ Checkout หรือก๊วนจบแล้วเท่านั้น เพื่อไม่ให้ปุ่มเข้ากระดานหายไประหว่างกำลังตีอยู่
-                    isUnpaid = (hasPendingBill || hasUnpaidBalance) && (s.Status >= 4 || userParticipation?.CheckoutTime != null);
+                    isUnpaid = (hasPendingBill || hasUnpaidBalance) && (s.Status >= 4 || userParticipation.CheckoutTime != null);
                 }
 
                 return new UpcomingSessionCardDto
                 {
+                    SessionPublicId = s.SessionPublicId,
                     SessionId = s.SessionId,
                     GroupName = s.GroupName,
                     ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -312,11 +392,13 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     StartTime = s.StartTime.ToString("HH:mm"),
                     EndTime = s.EndTime.ToString("HH:mm"),
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                    CourtName = s.Venue != null ? s.Venue.VenueName : null,
+                    CourtName = s.Venue != null ? s.Venue.VenueName ?? "" : "",
                     Location = s.Venue != null ? s.Venue.Address : null,
+                    Latitude = s.Venue != null ? s.Venue.Latitude : null,
+                    Longitude = s.Venue != null ? s.Venue.Longitude : null,
                     // ส่งยอดจ่ายจริงกลับไปแสดง
                     Price = expectedTotal > 0 ? $"{expectedTotal:N0} บาท" : "สอบถามผู้จัด",
-                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname : "N/A",
+                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname ?? "N/A" : "N/A",
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
@@ -328,8 +410,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     Status = s.Status,
                     CourtNumbers = s.CourtNumbers,
                     Notes = s.Notes,
-                    CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
-                    ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
+                    CourtFeePerPerson = s.CourtFeePerPerson?.ToString(),
+                    ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson?.ToString(),
                     CostingMethod = s.CostingMethod,
                     UserStatus = isUnpaid ? "PendingPayment" : userStatusStr
                 };
@@ -380,7 +462,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 query = query.Where(s => 
                     s.GroupName.ToLower().Contains(lowerKeyword) ||
                     (s.Venue != null && s.Venue.VenueName.ToLower().Contains(lowerKeyword)) ||
-                    (s.CreatedByUser != null && s.CreatedByUser.UserProfile != null && s.CreatedByUser.UserProfile.Nickname.ToLower().Contains(lowerKeyword)) ||
+                    (s.CreatedByUser != null && s.CreatedByUser.UserProfile != null && s.CreatedByUser.UserProfile.Nickname != null && s.CreatedByUser.UserProfile.Nickname.ToLower().Contains(lowerKeyword)) ||
                     (isDateSearch && s.SessionDate == searchDate)
                 );
             }
@@ -428,7 +510,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
                         bool hasPendingBill = s.ParticipantBills.Any(b => b.UserId == userId && b.Status == 1);
                         bool hasUnpaidBalance = expectedTotal - paidAmount > 0.1m;
-                        isUnpaid = hasPendingBill || (hasUnpaidBalance && (s.Status >= 4 || participant?.CheckoutTime != null));
+                        isUnpaid = hasPendingBill || (hasUnpaidBalance && (s.Status >= 4 || participant.CheckoutTime != null));
                     }
                     else // กรณี Status == 3 (Refund) ให้แสดงยอดเงินที่ควรจะได้คืน
                     {
@@ -438,16 +520,18 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     }
                 }
 
-                string userStatusStr = participant?.Status switch
+                string userStatusStr = participant switch
                 {
-                    1 => participant.CheckoutTime != null ? "CheckedOut" : (participant.CheckinTime != null ? "CheckedIn" : "Joined"),
-                    2 => "Waitlisted",
-                    3 => "Refund",
+                    null => "NotJoined",
+                    { Status: 1 } p => p.CheckoutTime != null ? "CheckedOut" : (p.CheckinTime != null ? "CheckedIn" : "Joined"),
+                    { Status: 2 } => "Waitlisted",
+                    { Status: 3 } => "Refund",
                     _ => "NotJoined"
                 };
 
                 return new UpcomingSessionCardDto
                 {
+                    SessionPublicId = s.SessionPublicId,
                     SessionId = s.SessionId,
                     GroupName = s.GroupName,
                     ImageUrl = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -456,10 +540,12 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     StartTime = s.StartTime.ToString("HH:mm"),
                     EndTime = s.EndTime.ToString("HH:mm"),
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime),
-                    CourtName = s.Venue != null ? s.Venue.VenueName : null,
+                    CourtName = s.Venue != null ? s.Venue.VenueName ?? "" : "",
                     Location = s.Venue != null ? s.Venue.Address : null,
+                    Latitude = s.Venue != null ? s.Venue.Latitude : null,
+                    Longitude = s.Venue != null ? s.Venue.Longitude : null,
                     Price = expectedTotal > 0 ? $"{expectedTotal:N0} บาท" : "สอบถามผู้จัด",
-                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname : "N/A",
+                    OrganizerName = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname ?? "N/A" : "N/A",
                     OrganizerImageUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null,
                     IsBookmarked = userBookmarks.Contains(s.SessionId),
                     MaxParticipants = s.MaxParticipants,
@@ -471,8 +557,8 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     Status = s.Status,
                     CourtNumbers = s.CourtNumbers,
                     Notes = s.Notes,
-                    CourtFeePerPerson = s.CourtFeePerPerson.ToString(),
-                    ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson.ToString(),
+                    CourtFeePerPerson = s.CourtFeePerPerson?.ToString(),
+                    ShuttlecockFeePerPerson = s.ShuttlecockFeePerPerson?.ToString(),
                     CostingMethod = s.CostingMethod,
                     UserStatus = (isUnpaid && participant?.Status != 3) ? "PendingPayment" : userStatusStr
                 };
@@ -486,7 +572,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
             var session = await _context.GameSessions
                 .Where(s => s.SessionId == sessionId)
                 .Include(s => s.Venue)
-                .Include(s => s.ShuttlecockModel).ThenInclude(m => m.Brand)
+                .Include(s => s.ShuttlecockModel).ThenInclude(m => m!.Brand)
                 .Include(s => s.GameSessionPhotos)
                 .Include(s => s.GameSessionFacilities).ThenInclude(f => f.Facility)
                 .Include(s => s.CreatedByUser).ThenInclude(u => u.UserProfile)
@@ -497,21 +583,22 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     Status = s.Status ?? 1,
                     SessionStart = s.SessionDate.ToDateTime(s.StartTime),
                     SessionEnd = s.SessionDate.ToDateTime(s.EndTime),
-                    VenueName = s.Venue != null ? s.Venue.VenueName : "N/A",
-                    VenueAddress = s.Venue != null ? s.Venue.Address : "N/A",
+                    VenueName = s.Venue != null ? (s.Venue.VenueName ?? "N/A") : "N/A",
+                    VenueAddress = s.Venue != null ? (s.Venue.Address ?? "N/A") : "N/A",
                     Latitude = s.Venue != null ? s.Venue.Latitude : 0,
                     Longitude = s.Venue != null ? s.Venue.Longitude : 0,
                     Organizer = new OrganizerInfoDto
                     {
                         UserId = s.CreatedByUserId,
-                        Nickname = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname : "N/A",
+                        Nickname = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.Nickname ?? "N/A" : "N/A",
                         ProfilePhotoUrl = s.CreatedByUser != null && s.CreatedByUser.UserProfile != null ? s.CreatedByUser.UserProfile.ProfilePhotoUrl : null
                     },
                     ShuttlecockInfo = s.ShuttlecockModel != null && s.ShuttlecockModel.Brand != null ? $"{s.ShuttlecockModel.Brand.BrandName} - {s.ShuttlecockModel.ModelName}" : null,
                     MaxParticipants = s.MaxParticipants,
                     Notes = s.Notes,
                     PhotoUrls = s.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).ToList(),
-                    Facilities = s.GameSessionFacilities.Select(f => new FacilityDto(f.FacilityId, f.Facility.FacilityName, f.Facility.IconUrl)).ToList()
+                    Facilities = s.GameSessionFacilities.Where(f => f.Facility != null)
+                        .Select(f => new FacilityDto(f.FacilityId, f.Facility!.FacilityName, f.Facility.IconUrl ?? "")).ToList()
                 })
                 .FirstOrDefaultAsync();
 
@@ -522,7 +609,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 .Select(p => new ParticipantDto
                 {
                     ParticipantId = p.ParticipantId,
-                    ParticipantType = "Member",
+                    ParticipantType = ParticipantTypes.Member,
                     UserId = p.UserId,
                     Nickname = p.User != null && p.User.UserProfile != null ? p.User.UserProfile.Nickname : "N/A",
                     FullName = p.User != null && p.User.UserProfile != null ? p.User.UserProfile.FirstName + " " + p.User.UserProfile.LastName : "N/A",
@@ -542,7 +629,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                 .Select(g => new ParticipantDto
                 {
                     ParticipantId = g.WalkinId,
-                    ParticipantType = "Guest",
+                    ParticipantType = ParticipantTypes.Guest,
                     UserId = null,
                     Nickname = g.GuestName,
                     FullName = g.GuestName,
@@ -596,7 +683,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
 
             var playedMatches = await _context.Matches
                 .Where(m => m.SessionId == sessionId && m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId))
-                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User!).ThenInclude(u => u.UserProfile)
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
                 .OrderBy(m => m.StartTime)
                 .ToListAsync();
@@ -714,14 +801,14 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     MyTeam = match.MatchPlayers.Where(mp => mp.Team == myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { 
                         UserId = mp.UserId,
                         WalkinId = mp.WalkinId,
-                        Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", 
-                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                        Nickname = mp.UserId.HasValue ? mp.User?.UserProfile?.Nickname ?? "N/A" : mp.Walkin?.GuestName ?? "N/A", 
+                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User?.UserProfile?.ProfilePhotoUrl : null 
                     }).ToList(),
                     Opponents = match.MatchPlayers.Where(mp => mp.Team != myMatchPlayer.Team).Select(mp => new PlayerInMatchDto { 
                         UserId = mp.UserId,
                         WalkinId = mp.WalkinId,
-                        Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A", 
-                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                        Nickname = mp.UserId.HasValue ? mp.User?.UserProfile?.Nickname ?? "N/A" : mp.Walkin?.GuestName ?? "N/A", 
+                        ProfilePhotoUrl = mp.UserId.HasValue ? mp.User?.UserProfile?.ProfilePhotoUrl : null 
                     }).ToList()
                 });
             }
@@ -762,6 +849,13 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                     if (session == null) return (null, "Session not found.");
                     if (session.Status != 1) return (null, "This session is no longer open for booking.");
                     if (session.CreatedByUserId == userId) return (null, "Organizers cannot join their own session as a participant.");
+
+                    var joinerProfile = await _context.UserProfiles.AsNoTracking()
+                        .FirstOrDefaultAsync(p => p.UserId == userId);
+                    if (joinerProfile == null || string.IsNullOrWhiteSpace(joinerProfile.PhoneNumber) || !joinerProfile.IsPhoneNumberVerified)
+                    {
+                        return (null, "กรุณาเพิ่มและยืนยันเบอร์โทรศัพท์ในโปรไฟล์ก่อนจองก๊วน");
+                    }
 
                     var existingParticipant = await _context.SessionParticipants.FirstOrDefaultAsync(p => p.UserId == userId && p.SessionId == sessionId);
                     if (existingParticipant != null && existingParticipant.Status != 3) return (null, "You are already registered for this session.");
@@ -1086,7 +1180,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
         {
             var playedMatches = await _context.Matches
                 .Where(m => m.SessionId == sessionId && m.Status == 2 && m.MatchPlayers.Any(mp => mp.UserId == userId))
-                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User.UserProfile)
+                .Include(m => m.MatchPlayers).ThenInclude(mp => mp.User!).ThenInclude(u => u.UserProfile)
                 .Include(m => m.MatchPlayers).ThenInclude(mp => mp.Walkin)
                 .OrderBy(m => m.StartTime)
                 .ToListAsync();
@@ -1115,15 +1209,15 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
                         .Select(mp => new PlayerInMatchDto { 
                             UserId = mp.UserId,
                             WalkinId = mp.WalkinId,
-                            Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A",
-                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                            Nickname = mp.UserId.HasValue ? mp.User?.UserProfile?.Nickname ?? "N/A" : mp.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User?.UserProfile?.ProfilePhotoUrl : null 
                         }).FirstOrDefault() ?? new PlayerInMatchDto { Nickname = "N/A" },
                     Opponents = match.MatchPlayers.Where(mp => mp.Team != myMatchPlayer.Team)
                         .Select(mp => new PlayerInMatchDto { 
                             UserId = mp.UserId,
                             WalkinId = mp.WalkinId,
-                            Nickname = mp.UserId.HasValue ? mp.User.UserProfile.Nickname : mp.Walkin?.GuestName ?? "N/A",
-                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User.UserProfile.ProfilePhotoUrl : null 
+                            Nickname = mp.UserId.HasValue ? mp.User?.UserProfile?.Nickname ?? "N/A" : mp.Walkin?.GuestName ?? "N/A",
+                            ProfilePhotoUrl = mp.UserId.HasValue ? mp.User?.UserProfile?.ProfilePhotoUrl : null 
                         }).ToList()
                 });
             }

@@ -3,7 +3,8 @@ using DropInBadAPI.Dtos;
 namespace DropInBadAPI.Service.Mobile.Game
 {
     public interface IGameSessionService
-    {        Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto);
+    {
+        Task<ManageGameSessionDto> CreateSessionAsync(int organizerUserId, SaveGameSessionDto dto, bool notifyFollowers = true);
         Task<EditGameSessionDto?> GetSessionForEditAsync(int sessionId);
         Task<ManageGameSessionDto?> UpdateSessionAsync(int sessionId, int organizerUserId, SaveGameSessionDto dto);
         Task<bool> CancelSessionAsync(int sessionId, int organizerUserId);

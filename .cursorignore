@@ -1,0 +1,41 @@
+# ----------------------------------------------------------------------
+# .cursorignore
+# ไฟล์สำหรับละเว้นการให้ Cursor AI อ่านโค้ดที่ไม่จำเป็น
+# ----------------------------------------------------------------------
+
+# IDE & Git
+.git/
+.vscode/
+.idea/
+*.DS_Store
+
+# ==========================================
+# Flutter & Dart (Frontend)
+# ==========================================
+badminton/build/
+badminton/.dart_tool/
+badminton/.fvm/
+badminton/android/.gradle/
+badminton/ios/Pods/
+badminton/ios/.symlinks/
+badminton/macos/Flutter/ephemeral/
+badminton/windows/flutter/ephemeral/
+badminton/linux/flutter/ephemeral/
+
+# ละเว้นไฟล์ที่ถูก Generate ขึ้นมาอัตโนมัติ
+**/*.g.dart
+**/*.freezed.dart
+**/*.mocks.dart
+
+# ==========================================
+# .NET 8 (Backend)
+# ==========================================
+DropInBadAPI/bin/
+DropInBadAPI/obj/
+DropInBadAPI/TestResults/
+
+# ==========================================
+# Secrets & Configs (เพื่อความปลอดภัย ไม่ให้ AI อ่าน)
+# ==========================================
+firebase-adminsdk.json
+*.env

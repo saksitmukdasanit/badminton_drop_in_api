@@ -1,3 +1,4 @@
+#nullable disable warnings
 namespace DropInBadAPI.Dtos
 {
     public class ParticipantFinancialDto

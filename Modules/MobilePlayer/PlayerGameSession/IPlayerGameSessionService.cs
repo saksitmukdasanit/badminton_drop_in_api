@@ -5,6 +5,7 @@ namespace DropInBadAPI.Service.MobilePlayer.Game
     public interface IPlayerGameSessionService
     {
         Task<IEnumerable<UpcomingSessionCardDto>> GetUpcomingSessionsAsync(int? currentUserId, string? keyword = null, string? sortBy = null, int? organizerId = null, List<DayOfWeek>? daysOfWeek = null, List<int>? gameTypeIds = null, int page = 1, int limit = 10);
+        Task<UpcomingSessionCardDto?> GetSessionCardByPublicIdAsync(Guid sessionPublicId, int? currentUserId);
         Task<MyGameSessionsResponseDto> GetMySessionsAsync(int userId);
         Task<IEnumerable<UpcomingSessionCardDto>> GetHistorySessionsAsync(int userId, string? keyword = null, string? sortBy = null, int page = 1, int limit = 10);
         Task<PlayerGameSessionViewDto?> GetSessionForPlayerViewAsync(int sessionId, int? currentUserId);

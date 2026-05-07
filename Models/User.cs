@@ -1,4 +1,4 @@
-﻿﻿﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace DropInBadAPI.Models;
@@ -18,6 +18,12 @@ public partial class User
     public DateTime? UpdatedDate { get; set; }
 
     public int? UpdatedBy { get; set; }
+
+    /// <summary>
+    /// เมื่อมีค่า = บัญชีถูกลบ (รอ grace period 30 วัน)
+    /// หลัง 30 วันจะถูก hard-delete โดย background job
+    /// </summary>
+    public DateTime? DeletedAt { get; set; }
 
     public virtual ICollection<GameSession> GameSessions { get; set; } = new List<GameSession>();
 

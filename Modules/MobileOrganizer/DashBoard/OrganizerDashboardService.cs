@@ -82,6 +82,7 @@ namespace DropInBadAPI.Services
                 var thaiCulture = new CultureInfo("th-TH");
                 nextSessionDto = new UpcomingSessionCardDto
                 {
+                    SessionPublicId = nextSession.SessionPublicId,
                     SessionId = nextSession.SessionId,
                     GroupName = nextSession.GroupName,
                     ImageUrl = nextSession.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -92,9 +93,11 @@ namespace DropInBadAPI.Services
                     SessionStart = nextSession.SessionDate.ToDateTime(nextSession.StartTime),
                     CourtName = nextSession.Venue?.VenueName ?? "",
                     Location = nextSession.Venue?.Address,
+                    Latitude = nextSession.Venue?.Latitude,
+                    Longitude = nextSession.Venue?.Longitude,
                     Price = (nextSession.CourtFeePerPerson.HasValue || nextSession.ShuttlecockFeePerPerson.HasValue)
                           ? $"{(nextSession.CourtFeePerPerson ?? 0) + (nextSession.ShuttlecockFeePerPerson ?? 0):N0} บาท" : "สอบถามผู้จัด",
-                    OrganizerName = profile.Nickname,
+                    OrganizerName = profile.Nickname ?? "",
                     OrganizerImageUrl = profile.ProfilePhotoUrl,
                     IsBookmarked = false,
                     CurrentParticipants = nextSession.SessionParticipants.Count(p => p.Status == 1) + nextSession.SessionWalkinGuests.Count(g => g.Status == 1),
@@ -114,7 +117,7 @@ namespace DropInBadAPI.Services
 
             return new OrganizerDashboardDto
             {
-                Profile = new OrganizerDashboardProfileDto { Nickname = profile.Nickname, ProfilePhotoUrl = profile.ProfilePhotoUrl, Status = (byte)organizerProfile.Status },
+                Profile = new OrganizerDashboardProfileDto { Nickname = profile.Nickname ?? "", ProfilePhotoUrl = profile.ProfilePhotoUrl, Status = (byte)organizerProfile.Status },
                 Stats = new OrganizerDashboardStatsDto 
                 { 
                     TotalSessionsHosted = totalSessionsHosted, 

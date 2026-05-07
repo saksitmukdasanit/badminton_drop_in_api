@@ -1,3 +1,4 @@
+#nullable disable warnings
 namespace DropInBadAPI.Dtos
 {
     public record VenueDataDto(
@@ -63,6 +64,7 @@ namespace DropInBadAPI.Dtos
     public record EditGameSessionDto
     {
         public int SessionId { get; set; }
+        public Guid SessionPublicId { get; set; }
         public string GroupName { get; set; }
         public VenueDataDto VenueData { get; set; }
         public DateOnly SessionDate { get; set; }
@@ -95,6 +97,7 @@ namespace DropInBadAPI.Dtos
     public class ManageGameSessionDto
     {
         public int SessionId { get; set; }
+        public Guid SessionPublicId { get; set; }
         public string? GroupName { get; set; }
         public int Status { get; set; } // สถานะก๊วน (สำคัญมากสำหรับ Frontend)
         public DateTime SessionStart { get; set; }
@@ -205,10 +208,38 @@ namespace DropInBadAPI.Dtos
         int? SkillLevelId
     );
 
+    /// <summary>Optional weights for auto-match scoring. Omitted properties keep defaults matching legacy behavior.</summary>
+    public class AutoMatchScoringWeightsDto
+    {
+        /// <summary>Multiplier × queue index (0 = highest priority in sorted queue).</summary>
+        public int QueuePositionMultiplier { get; set; } = 10;
+
+        /// <summary>Penalty × times two players were on court in the same finished match.</summary>
+        public int MatchTogetherPenaltyPerOccurrence { get; set; } = 40;
+
+        /// <summary>Mixed mode, pick #2 (opposite skill vs anchor): weight × −|Δskill|.</summary>
+        public int MixedModeOppositeSkillMultiplier { get; set; } = 15;
+
+        /// <summary>Mixed mode, picks #3–4 (teammate of anchor / opponent anchor): weight × |Δskill|.</summary>
+        public int MixedModeTeammateSkillMultiplier { get; set; } = 20;
+
+        /// <summary>Same-level mode: weight × |Δskill| vs first player.</summary>
+        public int SameLevelSkillMultiplier { get; set; } = 30;
+
+        /// <summary>Team split: × teammate repeat history count.</summary>
+        public int TeamFormationTeammateHistoryMultiplier { get; set; } = 2;
+
+        /// <summary>Team split: × opponent repeat history count (per pair).</summary>
+        public int TeamFormationOpponentHistoryMultiplier { get; set; } = 1;
+    }
+
       public class AutoMatchRequestDto
     {
         public bool IsMixedMode { get; set; }
         public List<string> ExcludedPlayerIds { get; set; } = new(); // ID ของคนที่ Pause/End เช่น ["Member_1", "Guest_5"]
+
+        /// <summary>Per-request tuning; mobile clients may omit for legacy defaults.</summary>
+        public AutoMatchScoringWeightsDto? ScoringWeights { get; set; }
     }
 
      public class SwapPlayersRequestDto

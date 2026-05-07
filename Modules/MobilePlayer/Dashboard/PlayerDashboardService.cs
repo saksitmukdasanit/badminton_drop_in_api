@@ -94,6 +94,7 @@ namespace DropInBadAPI.Services
                 var thaiCulture = new CultureInfo("th-TH");
                 nextSessionDto = new UpcomingSessionCardDto
                 {
+                    SessionPublicId = nextSession.SessionPublicId,
                     SessionId = nextSession.SessionId,
                     GroupName = nextSession.GroupName,
                     ImageUrl = nextSession.GameSessionPhotos.OrderBy(p => p.DisplayOrder).Select(p => p.PhotoUrl).FirstOrDefault(),
@@ -104,6 +105,8 @@ namespace DropInBadAPI.Services
                     SessionStart = nextSession.SessionDate.ToDateTime(nextSession.StartTime),
                     CourtName = nextSession.Venue?.VenueName ?? "",
                     Location = nextSession.Venue?.Address ?? "-",
+                    Latitude = nextSession.Venue?.Latitude,
+                    Longitude = nextSession.Venue?.Longitude,
                     Price = $"{(nextSession.CourtFeePerPerson ?? 0) + (nextSession.ShuttlecockFeePerPerson ?? 0):N0} บาท",
                     OrganizerName = nextSession.CreatedByUser?.UserProfile?.Nickname ?? "N/A",
                     OrganizerImageUrl = nextSession.CreatedByUser?.UserProfile?.ProfilePhotoUrl,
@@ -120,7 +123,7 @@ namespace DropInBadAPI.Services
             {
                 Profile = new PlayerDashboardProfileDto
                 {
-                    Nickname = profile.Nickname,
+                    Nickname = profile.Nickname ?? "",
                     ProfilePhotoUrl = profile.ProfilePhotoUrl,
                     LatestSkillLevelName = latestSkillText
                 },
