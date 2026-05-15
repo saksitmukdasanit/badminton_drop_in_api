@@ -96,10 +96,9 @@ namespace DropInBadAPI.Service.Mobile.Profile
             profile.BankId = dto.BankId;
             profile.BankAccountNumber = dto.BankAccountNumber;
             profile.BankAccountName = dto.BankAccountName;
-            if (!string.IsNullOrEmpty(dto.BankAccountPhotoUrl))
-            {
-                profile.BankAccountPhotoUrl = dto.BankAccountPhotoUrl;
-            }
+            // ตั้งตาม dto เสมอ — ผู้เรียกลบข้อมูลส่ง null ได้ต้องเคลียร์ URL เดิมด้วย
+            // (เดิมข้ามเมื่อว่าง เลยเก็บรูปสมุดเก่าค้างอยู่แม้กดลบแล้ว)
+            profile.BankAccountPhotoUrl = dto.BankAccountPhotoUrl;
             profile.UpdatedDate = DateTime.UtcNow;
             profile.UpdatedBy = userId;
 

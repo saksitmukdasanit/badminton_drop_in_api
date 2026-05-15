@@ -13,7 +13,28 @@ namespace DropInBadAPI.Dtos
     {
         public string Nickname { get; init; } = string.Empty;
         public string? ProfilePhotoUrl { get; init; }
-        public string? LatestSkillLevelName { get; init; } // ระดับมือล่าสุด
+        public string? LatestSkillLevelName { get; init; } // ระดับมือที่แสดงบนหน้าแรก (ตามการตั้งค่าหรือล่าสุด)
+        /// <summary>ผู้จัดที่เลือกให้แสดงบนหน้าแรก — null = โหมดอัตโนมัติ (ล่าสุด)</summary>
+        public int? SkillDisplayOrganizerUserId { get; init; }
+        /// <summary>true = ใช้ระดับจากผู้จัดที่เลือก, false = ระบบเลือกจากอัปเดตล่าสุด</summary>
+        public bool SkillLevelUsesManualOrganizerPreference { get; init; }
+    }
+
+    public record PlayerOrganizerSkillItemDto
+    {
+        public int OrganizerUserId { get; init; }
+        public string OrganizerNickname { get; init; } = string.Empty;
+        public string? OrganizerProfilePhotoUrl { get; init; }
+        public int SkillLevelId { get; init; }
+        public string SkillLevelName { get; init; } = string.Empty;
+        public DateTime? UpdatedDateUtc { get; init; }
+        public bool IsPreferredForHome { get; init; }
+    }
+
+    public record SetPlayerSkillDisplayOrganizerRequestDto
+    {
+        /// <summary>null = ใช้โหมดอัตโนมัติ (แสดงจากแถวล่าสุด)</summary>
+        public int? OrganizerUserId { get; init; }
     }
 
     public record PlayerDashboardStatsDto

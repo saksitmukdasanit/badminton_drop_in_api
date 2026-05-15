@@ -41,6 +41,9 @@ public partial class UserProfile
 
     public DateTime CreatedDate { get; set; }
 
+    /// <summary>ผู้จัดที่เลือกให้แสดงระดับมือบนหน้าแรก — null = ใช้แถวล่าสุดใน UserOrganizerSkills</summary>
+    public int? SkillDisplayOrganizerUserId { get; set; }
+
     public int? CreatedBy { get; set; }
 
     public DateTime? UpdatedDate { get; set; }

@@ -20,6 +20,7 @@ namespace DropInBadAPI.Dtos
         string ProviderName,
         string ProviderKey,
         string? Email,
-        string? Name
+        string? Name,
+        string? ProfilePhotoUrl
     );
 }

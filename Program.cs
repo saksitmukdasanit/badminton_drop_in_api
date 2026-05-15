@@ -1,3 +1,4 @@
+using DropInBadAPI.Models;
 using Microsoft.EntityFrameworkCore;
 using DropInBadAPI.Data;
 using DropInBadAPI.Interfaces;
@@ -6,6 +7,8 @@ using DropInBadAPI.Services; // ตรวจสอบให้แน่ใจว
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.Security.Claims;
+using System.Linq;
 using DropInBadAPI.Service.Mobile.Organizer;
 using DropInBadAPI.Service.Mobile.Game;
 using DropInBadAPI.Service.Mobile.Profile;
@@ -18,24 +21,41 @@ using Google.Apis.Auth.OAuth2;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.WebHost.UseUrls("http://localhost:5185");
+// 0.0.0.0 = รับทั้ง localhost / 127.0.0.1 / LAN (mobile ยิงจากเครือข่ายเดียวกันได้)
+builder.WebHost.UseUrls("http://0.0.0.0:5185");
 
 var MyAllowSpecificOrigins = "CorsPolicy";
+
+string[] CorsDefaultOrigins()
+{
+    return new[]
+    {
+        "http://localhost:5185",
+        "http://127.0.0.1:5185",
+        "http://10.0.2.2:5185",
+        "http://line-ddpm.we-builds.com",
+        "https://line-ddpm.we-builds.com",
+        "http://localhost:4200",
+        "http://127.0.0.1:4200",
+        "http://localhost:4201",
+        "http://127.0.0.1:4201",
+    };
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(name: MyAllowSpecificOrigins,
                       policy =>
                       {
-                          // แก้ไข: ลบ .AllowAnyOrigin() ที่ขัดแย้งออกไป
-                          // และเพิ่ม .AllowCredentials() ที่จำเป็นสำหรับ SignalR
-                          policy.WithOrigins(
-                                        "http://localhost:5185",         // อนุญาตตัวเอง และ iOS Simulator
-                                        "http://10.0.2.2:5185",          // อนุญาต Android Emulator (สำหรับการพัฒนา)
-                                        "http://line-ddpm.we-builds.com" // อนุญาต Domain ของคุณ
-                                     )
+                          // ควบคุมด้วย appsettings Cors:AllowedOrigins (เหมาะเมื่อเปลี่ยนโดเมน CMS/production)
+                          var configured = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+                          var origins = configured is { Length: > 0 }
+                              ? configured.Where(o => !string.IsNullOrWhiteSpace(o)).Select(o => o.TrimEnd('/')).Distinct().ToArray()
+                              : CorsDefaultOrigins();
+                          policy.WithOrigins(origins)
                                 .AllowAnyHeader()
                                 .AllowAnyMethod()
-                                .AllowCredentials(); // **สำคัญมากสำหรับ SignalR**
+                                .AllowCredentials(); // จำเป็นกับ SignalR / cookie-style clients
                       });
 });
 
@@ -102,6 +122,19 @@ builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<DropInBadAPI.Modules.UserSafety.IUserSafetyService, DropInBadAPI.Modules.UserSafety.UserSafetyService>();
 
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminAuditService, DropInBadAPI.Modules.Admin.AdminAuditService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminAuthService, DropInBadAPI.Modules.Admin.AdminAuthService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminCmsService, DropInBadAPI.Modules.Admin.AdminCmsService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminCmsAdminUsersService, DropInBadAPI.Modules.Admin.AdminCmsAdminUsersService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminAboutSettingsService, DropInBadAPI.Modules.Admin.AdminAboutSettingsService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminPolicyDocumentsService, DropInBadAPI.Modules.Admin.AdminPolicyDocumentsService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminAppUsersService, DropInBadAPI.Modules.Admin.AdminAppUsersService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminOrganizersService, DropInBadAPI.Modules.Admin.AdminOrganizersService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminGameSessionsAdminService, DropInBadAPI.Modules.Admin.AdminGameSessionsAdminService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminNotificationsAdminService, DropInBadAPI.Modules.Admin.AdminNotificationsAdminService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Admin.IAdminDashboardService, DropInBadAPI.Modules.Admin.AdminDashboardService>();
+builder.Services.AddScoped<DropInBadAPI.Modules.Public.ICmsPublicService, DropInBadAPI.Modules.Public.CmsPublicService>();
+
 builder.Services.AddScoped(typeof(IGenericService<>), typeof(GenericService<>));
 builder.Services.AddScoped<IDropdownService, DropdownService>();
 
@@ -143,7 +176,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
+            RoleClaimType = ClaimTypes.Role
         };
 
         // **สำคัญมาก:** เพิ่มส่วนนี้เพื่อให้ SignalR สามารถยืนยันตัวตนผ่าน Query String ได้
@@ -188,13 +222,11 @@ else
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-// if (app.Environment.IsDevelopment())
-// {
-//     app.UseSwagger();
-//     app.UseSwaggerUI();
-// }
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Staging"))
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 // app.UseHttpsRedirection();
 
 // **สำคัญมาก:** บอกให้แอปพลิเคชันรู้ว่าทำงานภายใต้ Path Base นี้
@@ -202,16 +234,46 @@ app.UseSwaggerUI();
 
 app.UseCors(MyAllowSpecificOrigins);
 
+app.UseStaticFiles();
 
-var useAuthentication = true;
-if (useAuthentication)
-{
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapHub<ManagementGameHub>("/managementGameHub");
 
 app.MapControllers();
 
+await SeedCmsAdminIfConfigured(app);
+
 app.Run();
+
+static async Task SeedCmsAdminIfConfigured(WebApplication app)
+{
+    using var scope = app.Services.CreateScope();
+    var cfg = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+    var seedEmail = cfg["CmsAuth:SeedAdminEmail"];
+    var seedPwd = cfg["CmsAuth:SeedAdminPassword"];
+    if (string.IsNullOrWhiteSpace(seedEmail) || string.IsNullOrWhiteSpace(seedPwd))
+    {
+        return;
+    }
+
+    var db = scope.ServiceProvider.GetRequiredService<BadmintonDbContext>();
+    if (await db.CmsAdminUsers.AnyAsync())
+    {
+        return;
+    }
+
+    var hasher = scope.ServiceProvider.GetRequiredService<DropInBadAPI.Modules.Auth.IPasswordHasher>();
+    db.CmsAdminUsers.Add(new CmsAdminUser
+    {
+        Email = seedEmail.Trim().ToLowerInvariant(),
+        PasswordHash = hasher.Hash(seedPwd),
+        DisplayName = "Seed Admin",
+        IsActive = true,
+        CreatedAtUtc = DateTime.UtcNow,
+        UpdatedAtUtc = DateTime.UtcNow
+    });
+    await db.SaveChangesAsync();
+    Console.WriteLine("[CMS] Seeded first CmsAdminUser (clear CmsAuth:SeedAdmin* after use).");
+}

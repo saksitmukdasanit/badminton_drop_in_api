@@ -65,5 +65,12 @@ namespace DropInBadAPI.Controllers.Mobile
             await _notificationService.UpdateFcmTokenAsync(GetCurrentUserId(), dto.Token);
             return Ok(new Response<object> { Status = 200, Message = "FCM Token updated successfully." });
         }
+
+        [HttpPost("fcm-token/unregister")]
+        public async Task<ActionResult<Response<object>>> UnregisterFcmToken([FromBody] UpdateFcmTokenDto dto)
+        {
+            await _notificationService.RemoveFcmTokenAsync(GetCurrentUserId(), dto.Token);
+            return Ok(new Response<object> { Status = 200, Message = "FCM token removed." });
+        }
     }
 }

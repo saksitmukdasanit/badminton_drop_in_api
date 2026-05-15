@@ -611,7 +611,9 @@ namespace DropInBadAPI.Repositories
                 FirstName = firstName,
                 LastName = lastName,
                 Nickname = !string.IsNullOrWhiteSpace(firstName) ? firstName : null,
-                IsPhoneNumberVerified = false
+                IsPhoneNumberVerified = false,
+                // ดึงรูปจาก provider เฉพาะครั้งแรก; รอบถัดไป (existingLogin) ไม่อัปเดต เพื่อไม่ทับรูปที่ user เปลี่ยนเอง
+                ProfilePhotoUrl = string.IsNullOrWhiteSpace(identity.ProfilePhotoUrl) ? null : identity.ProfilePhotoUrl.Trim()
             };
             _context.UserProfiles.Add(profile);
 

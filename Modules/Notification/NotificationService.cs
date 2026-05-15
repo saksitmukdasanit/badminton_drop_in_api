@@ -167,6 +167,60 @@ namespace DropInBadAPI.Services
             await Task.CompletedTask;
         }
 
+        public async Task DispatchFirebaseForUserAsync(int userId, string title, string message, string type, int? referenceId = null)
+        {
+            var fcmTokens = await _context.UserFcmTokens
+                .Where(t => t.UserId == userId)
+                .ToListAsync();
+
+            if (!fcmTokens.Any())
+            {
+                Console.WriteLine($"[FCM] ไม่พบ FCM Token สำหรับ UserID: {userId}");
+                return;
+            }
+
+            var tokensToDelete = new List<UserFcmToken>();
+
+            foreach (var fcmToken in fcmTokens)
+            {
+                var msg = new FirebaseAdmin.Messaging.Message()
+                {
+                    Token = fcmToken.Token,
+                    Notification = new FirebaseAdmin.Messaging.Notification
+                    {
+                        Title = title,
+                        Body = message
+                    },
+                    Android = new AndroidConfig { Priority = Priority.High },
+                    Apns = new ApnsConfig { Aps = new Aps { Sound = "default" } },
+                    Data = new Dictionary<string, string>
+                    {
+                        { "type", type },
+                        { "referenceId", referenceId?.ToString() ?? "" }
+                    }
+                };
+
+                try
+                {
+                    await FirebaseMessaging.DefaultInstance.SendAsync(msg);
+                }
+                catch (FirebaseMessagingException ex) when (ex.MessagingErrorCode == MessagingErrorCode.Unregistered || ex.MessagingErrorCode == MessagingErrorCode.InvalidArgument)
+                {
+                    tokensToDelete.Add(fcmToken);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[FCM-ERROR] UserID {userId} TokenId {fcmToken.TokenId}: {ex.Message}");
+                }
+            }
+
+            if (tokensToDelete.Any())
+            {
+                _context.UserFcmTokens.RemoveRange(tokensToDelete);
+                await _context.SaveChangesAsync();
+            }
+        }
+
         public async Task UpdateFcmTokenAsync(int userId, string token)
         {
             // เช็คว่ามี Token ในระบบอยู่แล้วหรือไม่ (ไม่สนใจว่าเป็นของใคร)
@@ -209,6 +263,18 @@ namespace DropInBadAPI.Services
             var oldLogins = await _context.UserLogins.Where(ul => ul.UserId == userId && ul.ProviderName == "FCM").ToListAsync();
             if (oldLogins.Any()) _context.UserLogins.RemoveRange(oldLogins);
 
+            await _context.SaveChangesAsync();
+        }
+
+        public async Task RemoveFcmTokenAsync(int userId, string token)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return;
+
+            var row = await _context.UserFcmTokens
+                .FirstOrDefaultAsync(t => t.UserId == userId && t.Token == token);
+            if (row == null) return;
+
+            _context.UserFcmTokens.Remove(row);
             await _context.SaveChangesAsync();
         }
     }

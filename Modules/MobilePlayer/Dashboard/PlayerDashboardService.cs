@@ -25,17 +25,33 @@ namespace DropInBadAPI.Services
             var profile = await _context.UserProfiles.FirstOrDefaultAsync(p => p.UserId == userId);
             if (profile == null) return null;
 
-            // 1. หาระดับมือที่ได้รับการประเมินล่าสุด (Last Assigned Skill Level)
-            var latestSkill = await _context.UserOrganizerSkills
+            var organizerSkills = await _context.UserOrganizerSkills
                 .Include(uos => uos.SkillLevel)
                 .Include(uos => uos.OrganizerUser).ThenInclude(u => u.UserProfile)
                 .Where(uos => uos.UserId == userId)
-                .OrderByDescending(uos => uos.UpdatedDate)
-                .FirstOrDefaultAsync();
+                .ToListAsync();
 
-            string? latestSkillText = latestSkill != null 
-                ? $"{latestSkill.SkillLevel.LevelName} (ประเมินโดย {latestSkill.OrganizerUser?.UserProfile?.Nickname})" 
+            if (profile.SkillDisplayOrganizerUserId.HasValue
+                && !organizerSkills.Any(s => s.OrganizerUserId == profile.SkillDisplayOrganizerUserId.Value))
+            {
+                profile.SkillDisplayOrganizerUserId = null;
+                await _context.SaveChangesAsync();
+            }
+
+            UserOrganizerSkill? displaySkill = null;
+            if (profile.SkillDisplayOrganizerUserId.HasValue)
+            {
+                displaySkill = organizerSkills.FirstOrDefault(s => s.OrganizerUserId == profile.SkillDisplayOrganizerUserId.Value);
+            }
+            displaySkill ??= organizerSkills
+                .OrderByDescending(s => s.UpdatedDate ?? DateTime.MinValue)
+                .FirstOrDefault();
+
+            string latestSkillText = displaySkill != null
+                ? $"{displaySkill.SkillLevel.LevelName} (ประเมินโดย {displaySkill.OrganizerUser?.UserProfile?.Nickname})"
                 : "ยังไม่มีข้อมูลระดับมือ";
+
+            bool usesManualPreference = profile.SkillDisplayOrganizerUserId.HasValue;
 
             // 2. สถิติการเล่น
             var finishedMatches = await _context.MatchPlayers
@@ -125,7 +141,9 @@ namespace DropInBadAPI.Services
                 {
                     Nickname = profile.Nickname ?? "",
                     ProfilePhotoUrl = profile.ProfilePhotoUrl,
-                    LatestSkillLevelName = latestSkillText
+                    LatestSkillLevelName = latestSkillText,
+                    SkillDisplayOrganizerUserId = profile.SkillDisplayOrganizerUserId,
+                    SkillLevelUsesManualOrganizerPreference = usesManualPreference
                 },
                 Stats = new PlayerDashboardStatsDto
                 {
@@ -140,6 +158,53 @@ namespace DropInBadAPI.Services
                 },
                 NextUpcomingSession = nextSessionDto
             };
+        }
+
+        public async Task<IReadOnlyList<PlayerOrganizerSkillItemDto>> GetPlayerOrganizerSkillsAsync(int userId)
+        {
+            var profile = await _context.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+            if (profile == null) return Array.Empty<PlayerOrganizerSkillItemDto>();
+
+            var rows = await _context.UserOrganizerSkills
+                .AsNoTracking()
+                .Include(uos => uos.SkillLevel)
+                .Include(uos => uos.OrganizerUser).ThenInclude(u => u.UserProfile)
+                .Where(uos => uos.UserId == userId)
+                .OrderByDescending(uos => uos.UpdatedDate ?? DateTime.MinValue)
+                .ToListAsync();
+
+            int? pref = profile.SkillDisplayOrganizerUserId;
+            return rows.ConvertAll(r => new PlayerOrganizerSkillItemDto
+            {
+                OrganizerUserId = r.OrganizerUserId,
+                OrganizerNickname = r.OrganizerUser?.UserProfile?.Nickname ?? "—",
+                OrganizerProfilePhotoUrl = r.OrganizerUser?.UserProfile?.ProfilePhotoUrl,
+                SkillLevelId = r.SkillLevelId,
+                SkillLevelName = r.SkillLevel.LevelName,
+                UpdatedDateUtc = r.UpdatedDate,
+                IsPreferredForHome = pref.HasValue && pref.Value == r.OrganizerUserId
+            });
+        }
+
+        public async Task<(bool ok, string? errorMessage)> SetSkillDisplayOrganizerPreferenceAsync(int userId, int? organizerUserId)
+        {
+            var profile = await _context.UserProfiles.FirstOrDefaultAsync(p => p.UserId == userId);
+            if (profile == null) return (false, "ไม่พบโปรไฟล์ผู้เล่น");
+
+            if (!organizerUserId.HasValue)
+            {
+                profile.SkillDisplayOrganizerUserId = null;
+                await _context.SaveChangesAsync();
+                return (true, null);
+            }
+
+            var exists = await _context.UserOrganizerSkills
+                .AnyAsync(u => u.UserId == userId && u.OrganizerUserId == organizerUserId.Value);
+            if (!exists) return (false, "ไม่มีระดับมือจากผู้จัดนี้");
+
+            profile.SkillDisplayOrganizerUserId = organizerUserId.Value;
+            await _context.SaveChangesAsync();
+            return (true, null);
         }
     }
 }

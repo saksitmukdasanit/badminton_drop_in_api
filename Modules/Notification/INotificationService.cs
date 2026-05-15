@@ -12,6 +12,10 @@ namespace DropInBadAPI.Interfaces
         Task<bool> MarkAllAsReadAsync(int userId);
         Task DeleteAllNotificationsAsync(int userId);
         Task SendNotificationAsync(int userId, string title, string message, string type, int? referenceId = null);
+        /// <summary>ส่ง FCM เท่านั้น (ใช้หลังบันทึกแถว Notification แล้ว เช่น CMS)</summary>
+        Task DispatchFirebaseForUserAsync(int userId, string title, string message, string type, int? referenceId = null);
         Task UpdateFcmTokenAsync(int userId, string token);
+        /// <summary>ลบ FCM token ของเครื่องนี้ออกจาก user (เรียกตอน logout)</summary>
+        Task RemoveFcmTokenAsync(int userId, string token);
     }
 }

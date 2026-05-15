@@ -37,6 +37,30 @@ namespace DropInBadAPI.Services
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
+        public string CreateAdminAccessToken(CmsAdminUser admin)
+        {
+            var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));
+            var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+            var accessMinutes = _config.GetValue("CmsAuth:AccessTokenMinutes", 60);
+
+            var claims = new[]
+            {
+                new Claim(ClaimTypes.NameIdentifier, admin.CmsAdminUserId.ToString()),
+                new Claim(ClaimTypes.Role, "Admin"),
+                new Claim(ClaimTypes.Email, admin.Email),
+                new Claim("token_kind", "cms_admin")
+            };
+
+            var token = new JwtSecurityToken(
+                issuer: _config["Jwt:Issuer"],
+                audience: _config["Jwt:Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddMinutes(accessMinutes),
+                signingCredentials: credentials);
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
         // ฟังก์ชันใหม่สำหรับสร้าง Refresh Token
         public string CreateRefreshToken()
         {

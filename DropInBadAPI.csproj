@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- เครื่องมือ CLI แยกโปรเจกต์ที่ Tools/ — ห้ามคอมไพล์ร่วมกับ Web API (จะชน CS8802 top-level Program) -->
+  <ItemGroup>
+    <Compile Remove="Tools/**/*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
     <PackageReference Include="FirebaseAdmin" Version="3.5.0" />

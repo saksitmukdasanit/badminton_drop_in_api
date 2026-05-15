@@ -39,11 +39,13 @@ public class GoogleTokenVerifier : IGoogleTokenVerifier
             };
 
             var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+            var picture = string.IsNullOrWhiteSpace(payload.Picture) ? null : payload.Picture.Trim();
             return new VerifiedSocialIdentity(
                 ProviderName: ProviderName,
                 ProviderKey: payload.Subject,
                 Email: payload.Email,
-                Name: payload.Name
+                Name: payload.Name,
+                ProfilePhotoUrl: picture
             );
         }
         catch (InvalidJwtException ex)

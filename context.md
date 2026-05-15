@@ -91,6 +91,7 @@
 - **Social Login (Phase 1 — Google + Apple):**
   - DB schema เดิม `UserLogins.ProviderName/ProviderKey` รองรับ multi-provider อยู่แล้ว (Local / Google / Apple / SMSMKT)
   - Backend: `IGoogleTokenVerifier` (verify ผ่าน `Google.Apis.Auth`) + `IAppleTokenVerifier` (verify JWT กับ Apple JWKS endpoint, validate `iss=https://appleid.apple.com` + `aud=BundleId/ServiceId`); `AuthService.LoginWithGoogleAsync` / `LoginWithAppleAsync` — ถ้าเจอ ProviderKey เดิม → ออก token; ถ้าไม่เจอ → สร้าง User+Profile+UserLogin ใหม่และ flag `RequiresPhoneVerification=true`
+  - **รูปโปรไฟล์จาก social (ครั้งแรกเท่านั้น):** `VerifiedSocialIdentity` มี `ProfilePhotoUrl` — Google ดึงจาก claim `picture` ใน ID token; Apple ไม่ส่งรูปใน identity token → ค่า `null`. ตอนสร้าง `UserProfile` ใหม่จึงตั้ง `ProfilePhotoURL` จาก Google ได้; **ถ้า UserLogin เดิมมีอยู่แล้ว (ล็อกอินซ้ำ) ไม่อัปเดตรูป** — ไม่ทับรูปที่ผู้ใช้เปลี่ยนในแอปภายหลัง
   - **ไม่ auto-link ด้วย email** เพราะ DB เดิมไม่ verify email — ผู้ใช้ที่อยากผูก social กับบัญชีเก่าจะทำใน Settings → Linked Accounts (Phase 2 ในอนาคต)
   - `POST /api/auth/login-google` + `POST /api/auth/login-apple` (anonymous) คืน `SocialLoginResponseDto { accessToken, refreshToken, requiresPhoneVerification, phoneNumber }`
   - `POST /api/auth/link-phone` (authorized) — สำหรับ user ที่ login ผ่าน social ครั้งแรก: บันทึกเบอร์ลง UserProfile + ส่ง OTP ผ่าน SMSMKT
@@ -538,6 +539,7 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
   - **Responsive Design Strategy:** ใช้วิธีแบบผสมผสาน (Hybrid) 
     1. โครงสร้าง (Layout): ใช้ `LayoutBuilder` แบ่งคอลัมน์สำหรับ Tablet (iPad) และจัดเรียงแนวตั้งสำหรับ Mobile
     2. ขนาดฟอนต์ (Scaling): ใช้ฟังก์ชัน `getResponsiveFontSize` แบบ Native แต่บังคับใช้ `.clamp()` เพื่อจำกัดไม่ให้ฟอนต์ขยายใหญ่เกินขีดจำกัดบนหน้าจอแท็บเล็ต
+- **Per-court UI timers:** สถานะที่ผูกหลายสนาม (เช่น `Timer` ต่อสนาม) ต้องใช้คีย์ที่ **ไม่ชนกันระหว่างสนาม** — ใช้ `courtIdentifier` / `identifier` จาก backend; อย่าใช้ `int.tryParse(...)` เป็นคีย์เดียว เพราะ parse ไม่ได้จะชนกันที่ค่า default (เช่น `0`)
 
 ## 7. Project Directory Structure (กฎการวางไฟล์สำหรับ AI)
 เพื่อรักษามาตรฐานสถาปัตยกรรมของโปรเจกต์ ให้ AI อ้างอิงการสร้างหรือแก้ไขไฟล์ตามโครงสร้างนี้:
@@ -564,10 +566,17 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - `lib/shared/` -> Core Logic, API Provider, State Management (Providers)
 - `lib/widget/` -> Custom Widgets เฉพาะทาง
 
+### 7.3 CMS (Angular) — `badminton-cms/`
+- โปรเจกต์ Angular แยกจาก Flutter เรียก API เดียวกัน (เฉพาะเส้น `/api/admin/*` + JWT role `Admin`)
+- **UI:** เลย์เอาต์เมนูซ้าย + topbar ตามธีม **InApp (Bootstrap 5 + Tabler icons)** — SCSS อยู่ที่ `badminton-cms/src/assets/inapp-scss/` สรุปใน `badminton-cms/README-CMS-THEME.md`
+- **วิธีสร้างบัญชีแอดมินและ login:** [`docs/CMS_ADMIN_LOGIN.md`](docs/CMS_ADMIN_LOGIN.md)
+- เครื่องมือ hash รหัสสำหรับแทรก SQL ด้วยมือ: `DropInBadAPI/Tools/HashCmsPassword/`
+
 ## 8. System Status & Completed Features (สถานะระบบปัจจุบัน)
 
 **[Authentication & Security]**
 - รองรับ Guest Mode (Apple Guideline) และ Token Refresh Locking แบบ Rolling
+- **CMS หลังบ้าน (Angular):** ตาราง `CmsAdminUsers` + `POST /api/admin/auth/login|refresh` (refresh แบบ sliding) + CRUD เนื้อหา `/api/admin/cms/content` — คู่มือแอดมิน: `docs/CMS_ADMIN_LOGIN.md`
 - แยกตาราง `UserFcmTokens` รองรับ 1-to-N Devices
 - Fire-and-forget FCM Token Update ป้องกันหน้า Login หมุนค้าง
 - ปิด Auto Backup ใน Android ป้องกัน Token เก่าค้างเมื่อลงแอปใหม่
@@ -575,6 +584,7 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 **[Game & Live State (SignalR)]**
 - ระบบกระดาน Live State ลื่นไหลด้วย Optimistic UI ทั้งผู้เล่นและผู้จัด
 - จัดการเวลาแบบ Smart Backend (อิงเวลาเซิร์ฟเวอร์เพื่อความแม่นยำ)
+- **หน้าผู้จัด `manage_game.dart` — จับเวลาหลายสนาม:** `Map<String, Timer> _timers` ใช้ **`PlayingCourt.identifier`** (สตริงจาก API `courtIdentifier`) เป็นคีย์ — **ไม่ใช้** `int.tryParse(courtIdentifier)` เป็นคีย์ Timer (ถ้าชื่อสนามไม่ใช่ตัวเลขล้วน ทุกสนามเคยกลายเป็น `0` ทับกัน เหลือนับแค่สนามเดียว). เริ่ม `Timer.periodic` หลัง `setState` แล้ว; callback หา index ด้วย `identifier` เสมอ
 - UI รองรับการย่อ Card อัตโนมัติเมื่อลงสนาม และมีสัญลักษณ์ Walk-in ชัดเจน
 - มี `ReadOnlyCourtTimerWidget` ในแอปผู้เล่นเพื่อนับเวลาแบบ Real-time
 - `WidgetsBindingObserver` บังคับ SignalR ต่อใหม่เสมอเมื่อเปิดแอปจาก Background (ป้องกันข้อมูล Stale)
@@ -608,6 +618,19 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - ระบบแจ้งเตือนทะลุ Doze Mode (High Priority)
 - กด Noti เพื่อ Route ไปหน้าก๊วนถูกต้อง (มีการยิง API เช็คสถานะก่อนเปลี่ยนหน้า ป้องกันเด้งเข้าสนามที่ยังไม่เริ่ม)
 
+**[CMS/Admin ล่าสุด — 2026-05-09]**
+- **Wallet filters (สมาชิก/ผู้จัด):** เพิ่มปุ่ม `ล้างตัวกรอง` ในบล็อกธุรกรรม Wallet และรองรับกด Enter เพื่อค้นหาในทุกช่อง filter (`ประเภท/ผู้รับ/Ref/จากวันที่/ถึงวันที่`)
+- **Notifications admin form:** รองรับ Enter เพื่อส่งในช่องกรอกทั่วไป, ช่องข้อความรองรับ `Enter = ขึ้นบรรทัดใหม่` และ `Ctrl+Enter = ส่ง`
+- **Dashboard API hardening (`/api/admin/dashboard/summary`):**
+  - แก้สาเหตุ daily trend ว่างจาก Npgsql error `DateTime Kind=Unspecified` โดยบังคับค่าต้นช่วงเป็น UTC ก่อน query (`DateTime.SpecifyKind(..., Utc)`)
+  - แยก safe query สำหรับ users/sessions/notifications พร้อม log error รายแหล่งข้อมูล (ไม่ล้มทั้งกราฟเมื่อพังบางส่วน)
+  - ผลลัพธ์ปัจจุบัน `daily7Days` / `daily30Days` กลับมามีข้อมูลแล้ว
+- **Dashboard UX/UI (CMS):**
+  - เพิ่ม Donut chart สัดส่วน alert งานค้าง (รออนุมัติ/ผิดปกติ/เสี่ยงส่งล้มเหลว)
+  - ปรับกราฟปฏิบัติการเป็น 2 มุมมอง: `รายวัน (line chart)` และ `สรุปรายสัปดาห์`
+  - เพิ่ม custom tooltip บนกราฟเส้น + เส้นแนวตั้งตามตำแหน่งเมาส์ (แทน SVG title เดิมที่บางเครื่องไม่แสดง); tooltip ใช้ `left%` clamp กันหลุดขอบ + รองรับ `touchstart`/`touchmove` บนแท็บเล็ต + ข้อความหลายบรรทัดเมื่อจอแคบ
+  - **ถัดไป (checklist):** ดู **ข้อ 15** ในหัวข้อ `Next Steps (Roadmap)` ด้านล่างของไฟล์นี้
+
 ## 9. Technical Debt & Known Issues
 - ~~`GameSessionService.cs` เป็น God Object (~2,400 บรรทัด)~~ → **แยกครบแล้ว** เป็น `GameSessionBookingService` (เพิ่ม Walk-in / ลบ / เลื่อนคิว), `GameSessionBillingService` (สรุปการเงิน), `IAutoMatchService` (AutoMatch + Swap + AssignReserve + MovePlayers + BroadcastLiveStateChange) และ `ParticipantDtoMapper` (รวม mapping ของ Member/Guest); `GameSessionService` ลดเหลือ ~1,100 บรรทัดและทำหน้าที่เป็น façade ผ่าน `IGameSessionService` (controller ไม่ต้องแก้)
 - ~~Auto Match Scoring + Weight Preset~~ → **ครบทั้ง stack** (server-side preset):
@@ -623,7 +646,8 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - ~~Promote-waitlist ไม่มี transaction~~ → **แก้แล้ว** Serializable TX + re-check capacity
 - ~~`participantType` literals~~ → **เรียบร้อย** ใช้ `ParticipantTypes.Member` / `Guest` และ helper `ParticipantTypes.IsMember` / `IsGuest` / `IsMemberOrGuest` ใน controller + billing + participant flows; payload JSON ถึงผู้เล่นยังเป็น `"Member"` / `"Guest"` เหมือนเดิม
 - ~~`withOpacity` deprecated warning กระจายในหลายไฟล์ Flutter~~ → **กวาดครบใน `lib/`** แทนด้วย `Color.withValues(alpha:)` แล้ว
-- ~~`MatchManagementService` nullable / โครงสร้าง~~ → **partial ครบ + กวาด nullable ในโฟลเดอร์นั้นแล้ว**; **backend `dotnet build` 0 warnings** (DTO หลักใช้ `#nullable disable warnings` เฉพาะไฟล์เพื่อตัด noise CS8618 โดยยังเก็บ `string?` ใน contract ได้)
+- ~~`MatchManagementService` nullable / โครงสร้าง~~ → **partial ครบ + กวาด nullable ในโฟลเดอร์นั้นแล้ว**; **backend `dotnet build` 0 warnings** (DTO หลายไฟล์ใช้ `#nullable disable warnings` เฉพาะไฟล์เพื่อตัด noise CS8618 โดยยังเก็บ `string?` ใน contract ได้)
+- ~~หน้าผู้จัดนับเวลาแค่สนามเดียวเมื่อมีหลายสนาม~~ → **แก้แล้ว** (`manage_game.dart`): `_timers` เป็น `Map<String, Timer>` คีย์ด้วย `identifier`; ถ้า backend ส่ง `courtIdentifier` **ซ้ำ** ระหว่างสนาม ยังอาจทับกันได้ — ต้องคง unique ฝั่ง API/ข้อมูล
 
 ## 10. Next Steps (Roadmap)
 > หมายเหตุ: DB migration ทั้ง 3 ไฟล์ + `Xendit:WebhookVerificationToken` — **ทีมตั้งค่าใน environment แล้ว** (deploy ยังต้อง verify smoke test ตามรายการด้านล่าง)  
@@ -659,6 +683,13 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 12. ~~**withOpacity → withValues(alpha:) sweep**~~ ✅ **เสร็จแล้ว** (`lib/` ไม่เหลือ `.withOpacity(`)
 13. ~~**Skeleton Loaders ขยายไปหน้าอื่น**~~ ✅ **เสร็จแล้ว** — `SessionCardListSkeleton` (ค้นหา + ประวัติ), `MyGamesPageSkeleton`, `WalletPageSkeleton`
 14. **UI/UX Polish & Store Preparation:** App Icon, Splash Screen, Permissions, App Store screenshots, Empty states with illustration
+15. **CMS / Admin — รอบถัดไป (actionable):**
+    - อ้างอิงสิ่งที่ทำแล้วในบล็อก **`[CMS/Admin ล่าสุด — 2026-05-09]`** ด้านบน (Wallet / Notifications / Dashboard API + UI)
+    - **Deploy ยืนยัน:** ขึ้น API ที่มี `AdminDashboardService` (UTC + safe daily queries) แล้ว smoke `GET /api/admin/dashboard/summary` บน staging/production ว่า `daily7Days` / `daily30Days` ไม่ว่าง และกราฟ CMS แสดงตรงข้อมูล (`Modules/Admin/Dashboard/` + Angular `dashboard.component.*`)
+    - **Dashboard chart:** ~~ปรับ tooltip line chart ไม่ให้ล้นขอบซ้าย/ขวา (clamp)~~ — **ทำใน CMS แล้ว**; **ยังต้อง QA** Safari/Chrome + tablet (สัมผัสเลื่อนบนกราฟ = ขยับจุดเดียวกับเลื่อนเมาส์)
+    - **Mobile ↔ CMS About:** ทดสอบ end-to-end `GET /public/app-content/profile-about` จากแอป (รูป ชื่อ เวอร์ชัน อีเมล policy/terms) หลังแก้ CMS
+    - **Alert metrics (อนาคต):** พิจารณาเก็บ log การส่งแจ้งเตือนล้มเหลวจริงแทนการประมาณจาก “ไม่มี FCM token” ถ้าต้องการรายงาน audit
+    - **CMS quality:** เก็บ UX เล็กๆ ที่เหลือ (label ไทย spacing responsive) บนหน้าที่ยังไม่ได้ไล่ครบ
 
 <!-- ตัวอย่างการแจ้งแก้ UI ให้ผม
 เครื่องที่เทส: iPad Mini 5 (หรือ iPhone SE, Galaxy S23) หน้าจอ: จัดการก๊วน manage_game.dart ปัญหาที่เจอ: ในการ์ดสนามตรงปุ่ม Pause ไอคอนมันเล็กเกินไป และชื่อผู้เล่นในช่องมันยาวจนตกบรรทัดไปทับขอบการ์ด -->

@@ -82,6 +82,16 @@ public partial class BadmintonDbContext : DbContext
 
     public virtual DbSet<UserFcmToken> UserFcmTokens { get; set; }
 
+    public virtual DbSet<CmsAdminUser> CmsAdminUsers { get; set; }
+
+    public virtual DbSet<CmsContentItem> CmsContentItems { get; set; }
+
+    public virtual DbSet<AdminAuditLog> AdminAuditLogs { get; set; }
+
+    public virtual DbSet<CmsAboutSettings> CmsAboutSettings { get; set; }
+
+    public virtual DbSet<CmsPolicyDocument> CmsPolicyDocuments { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bank>(entity =>
@@ -540,6 +550,8 @@ public partial class BadmintonDbContext : DbContext
                 .HasMaxLength(500)
                 .HasColumnName("ProfilePhotoURL");
 
+            entity.Property(e => e.SkillDisplayOrganizerUserId).HasColumnName("SkillDisplayOrganizerUserID");
+
             entity.Property(e => e.BankId).HasColumnName("BankID");
             entity.Property(e => e.BankAccountNumber).HasMaxLength(50);
             entity.Property(e => e.BankAccountName).HasMaxLength(150);
@@ -771,6 +783,58 @@ public partial class BadmintonDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.BlockedUserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CmsAdminUser>(entity =>
+        {
+            entity.ToTable("CmsAdminUsers");
+            entity.HasKey(e => e.CmsAdminUserId);
+            entity.Property(e => e.Email).HasMaxLength(255);
+            entity.Property(e => e.PasswordHash).HasMaxLength(256);
+            entity.Property(e => e.DisplayName).HasMaxLength(200);
+            entity.Property(e => e.RefreshToken).HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<CmsContentItem>(entity =>
+        {
+            entity.ToTable("CmsContentItems");
+            entity.HasKey(e => e.CmsContentItemId);
+            entity.Property(e => e.Title).HasMaxLength(200);
+            entity.Property(e => e.ImageUrl).HasMaxLength(500);
+            entity.Property(e => e.LinkUrl).HasMaxLength(500);
+            entity.HasOne(e => e.CreatedBy)
+                .WithMany()
+                .HasForeignKey(e => e.CreatedByCmsAdminUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AdminAuditLog>(entity =>
+        {
+            entity.ToTable("AdminAuditLogs");
+            entity.HasKey(e => e.AdminAuditLogId);
+            entity.Property(e => e.Action).HasMaxLength(80);
+            entity.Property(e => e.EntityType).HasMaxLength(80);
+            entity.Property(e => e.EntityId).HasMaxLength(64);
+            entity.Property(e => e.IpAddress).HasMaxLength(45);
+            entity.HasOne(e => e.AdminUser)
+                .WithMany()
+                .HasForeignKey(e => e.CmsAdminUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CmsAboutSettings>(entity =>
+        {
+            entity.ToTable("CmsAboutSettings");
+            entity.HasKey(e => e.CmsAboutSettingsId);
+            entity.Property(e => e.Title).HasMaxLength(300);
+        });
+
+        modelBuilder.Entity<CmsPolicyDocument>(entity =>
+        {
+            entity.ToTable("CmsPolicyDocuments");
+            entity.HasKey(e => e.CmsPolicyDocumentId);
+            entity.Property(e => e.Title).HasMaxLength(200);
+            entity.Property(e => e.Slug).HasMaxLength(120);
         });
 
         OnModelCreatingPartial(modelBuilder);

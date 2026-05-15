@@ -79,7 +79,8 @@ public class AppleTokenVerifier : IAppleTokenVerifier
                 ProviderName: ProviderName,
                 ProviderKey: sub,
                 Email: email,
-                Name: null // Apple ส่ง full name มาเฉพาะตอนสมัครครั้งแรกผ่าน authorization code, ไม่อยู่ใน identity token
+                Name: null, // Apple ส่ง full name มาเฉพาะตอนสมัครครั้งแรกผ่าน authorization code, ไม่อยู่ใน identity token
+                ProfilePhotoUrl: null // Sign in with Apple ไม่ส่งรูปใน identity token
             );
         }
         catch (SecurityTokenException ex)
