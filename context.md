@@ -41,6 +41,21 @@
   - `1` = เงินสด / บัตรเครดิต (Cash/Card)
   - `2` = QR Code
   - `3` = กระเป๋าเงิน (Wallet)
+- **QR Payment Dialog (Flutter — จุดเรียกใช้ร่วมกัน):** `lib/component/qr_payment_dialog.dart`
+  - เปิดผ่าน `showQrPaymentDialog(context, amount, qrData:, sessionId:, billId:)`
+  - **4 ทางเข้า:**
+    1. `payment.dart` — ผู้เล่น join ครั้งแรก (`POST /api/player/gamesessions/{id}/join`)
+    2. `payment_now.dart` — ผู้เล่นจ่ายค้างชำระ (`POST .../checkout-and-pay`)
+    3. `expense_panel.dart` — ผู้จัดเก็บเงินหน้างาน (`POST .../checkout` + `POST /api/bills/{id}/pay`)
+    4. `history_organizer_payment.dart` — ผู้จัดจากประวัติ (`POST /api/bills/{id}/pay`)
+  - Dialog เชื่อม SignalR `ManagementGameHub` → `JoinSessionGroup(sessionId)` → รอ `QrPaymentSuccess`
+  - ปิด dialog ผ่าน `_closeDialog()` (guard `_dialogClosed` กัน double `Navigator.pop` → จอดำ)
+  - Parse response ใช้ `lib/shared/response_parsers.dart` (`billId`/`BillId`, `qrCode`/`QrCode`)
+- **โหมดทดสอบ QR (ปิดก่อน production):**
+  - Flutter: `kAllowSimulateQrTap = true` ใน `qr_payment_dialog.dart` → แสดงปุ่ม「จำลองชำระเงิน (ทดสอบ)」+ แตะ QR ได้
+  - Backend: `Payment:AllowSimulateQrPayment: true` ใน `appsettings.json`
+  - Endpoint: `POST /api/player/gamesessions/bills/{billId}/simulate-qr-payment` — อนุญาตเฉพาะ **เจ้าของบิล** หรือ **ผู้จัดก๊วน** → เรียก `ProcessQrPaymentWebhookAsync` → ยิง SignalR เหมือน Xendit จริง
+- **Join + QR flow (ผู้เล่น):** `/booking-confirm` → `/payment/:id` → join API → QR dialog → (จ่ายสำเร็จ) → `/my-game-user`; (ยกเลิก QR) → race-check `history-detail` → `DELETE .../cancel?isAbort=true`
 
 ### 3.3 Refund, Wallet & Withdrawal (กระเป๋าเงินและการถอน)
 - **ตารางหลัก:** `UserWallets` และ `WalletTransactions`
@@ -100,6 +115,7 @@
 - **Login Race Fix:** `AuthProvider.login()` เขียน `accessToken`/`refreshToken` ลง `SharedPreferences` ให้เสร็จก่อน `notifyListeners()` และ `LoginScreen` `await login()` ก่อน `context.go('/')` กันอาการ "ติดตั้งใหม่ login แล้วข้อมูลไม่ขึ้น" (Dio interceptor อ่าน token ทัน)
 - **Token Refresh Locking:** มีกลไก Lock ใน `ApiProvider` เพื่อป้องกันการยิง API Refresh Token ซ้ำซ้อนพร้อมกันหลายเส้นเมื่อ Token หมดอายุ (แก้ปัญหาแอปแครชและเซิร์ฟเวอร์ทำงานหนัก)
 - **Rolling Refresh Token:** ทุกครั้งที่มีการ Refresh Token ฝั่ง Backend จะยืดอายุ Refresh Token ออกไปอีก 90 วัน เพื่อทำระบบ "Keep Me Logged In" อย่างสมบูรณ์แบบ
+- **OTP Bypass (SMSMKT dev/test):** เมื่อ `SmsMkt:BypassOtp: true` ใช้ `UserLogins.ProviderKey = __OTP_BYPASS__:{userId}` (per-user) แทน key เดียวทั้งระบบ — แก้ `duplicate key UserLogins_pkey` ตอนสมัครคนที่ 2+; `RegisterAsync` มี try-catch + ลบ user ไม่สมบูรณ์ก่อน retry; global exception handler ใน `Program.cs` คืน JSON 500
 
 ## 4. Database Schema Summary (ตารางที่สำคัญ)
 - **Users / UserProfiles:** ข้อมูลผู้ใช้งานทั่วไป
@@ -648,6 +664,82 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - ~~`withOpacity` deprecated warning กระจายในหลายไฟล์ Flutter~~ → **กวาดครบใน `lib/`** แทนด้วย `Color.withValues(alpha:)` แล้ว
 - ~~`MatchManagementService` nullable / โครงสร้าง~~ → **partial ครบ + กวาด nullable ในโฟลเดอร์นั้นแล้ว**; **backend `dotnet build` 0 warnings** (DTO หลายไฟล์ใช้ `#nullable disable warnings` เฉพาะไฟล์เพื่อตัด noise CS8618 โดยยังเก็บ `string?` ใน contract ได้)
 - ~~หน้าผู้จัดนับเวลาแค่สนามเดียวเมื่อมีหลายสนาม~~ → **แก้แล้ว** (`manage_game.dart`): `_timers` เป็น `Map<String, Timer>` คีย์ด้วย `identifier`; ถ้า backend ส่ง `courtIdentifier` **ซ้ำ** ระหว่างสนาม ยังอาจทับกันได้ — ต้องคง unique ฝั่ง API/ข้อมูล
+- ~~หลัง sleep จบเกม+จัดออโต้ไม่แสดงคนในสนาม~~ → **แก้แล้ว** (`manage_game.dart`, `game_player.dart`): `_ensureSignalRConnectedAndJoined()` หลัง resume + re-join ใน `onreconnected`; `_autoMatchAPI` / `_endGame` fallback `_fetchLiveState` เมื่อ SignalR ไม่ส่ง event
+- ~~หยุดชั่วคราวสนาม A แล้วเริ่มสนาม B แต่ A เริ่มต่อด้วย~~ → **แก้แล้ว** (`manage_game.dart`): `_pausedCourtIdentifiers` + freeze elapsed — หยุดชั่วคราวเป็น client-only; `_processLiveStateData` ไม่เปลี่ยน paused กลับเป็น playing เมื่อ SignalR อัปเดต
+- ~~สมัครสมาชิกล้มเหลว (OTP bypass)~~ → **แก้แล้ว** (`AuthService.cs`): per-user `__OTP_BYPASS__:{userId}` + safe delete incomplete registration
+- ~~Join QR กดไม่ได้ / billId=0~~ → **แก้แล้ว** (`payment.dart` + `response_parsers.dart`): ลบ mock QR, parse ทั้ง camelCase/PascalCase
+- ~~แตะ QR จำลองชำระแล้วจอดำ~~ → **แก้แล้ว** (`qr_payment_dialog.dart`): `_dialogClosed` guard กัน double pop จาก simulate + SignalR พร้อมกัน; `payment.dart` ใช้ `addPostFrameCallback` ก่อน `go()`
+- **ค้างก่อน production:** ตั้ง `kAllowSimulateQrTap = false` + `Payment:AllowSimulateQrPayment: false` + `SmsMkt:BypassOtp: false`
+- **`payment_cancel.dart`:** ยังเป็น UI mock (hardcoded) — ไม่เชื่อม API จริง
+- **`booking_confirm.dart`:** `PlayerCheckedIn` ใช้ `Navigator.pop()` โดยตรง (ไม่มี guard) — เสี่ยง pop ผิด route คล้าย QR dialog ถ้ามี dialog อื่นเปิดค้าง
+- **ไม่มี automated test:** Flutter มีแค่ `test/widget_test.dart` ต้นแบบ; .NET ไม่มี test project — ดู §11 สำหรับ test matrix แบบ manual
+
+## 11. QA Test Matrix & Code Audit (P0)
+
+### 11.1 Test Matrix — สรุปจำนวน
+
+| ระดับ | จำนวน | ใช้เมื่อ |
+|-------|-------|---------|
+| **P0** | 12 (TM-01–12) | ก่อนทุก release |
+| **P1** | 12 (TM-13–24) | ก่อนปล่อย Store |
+| **P2** | 8 (TM-25–32) | regression รอบใหญ่ |
+| **QR sub** | 16 (QR-01–16) | ครอบคลุม 4 ทางเข้า QR dialog |
+| **รวม** | ~52 cases | |
+
+**ลำดับทดสอบแนะนำ (รอบล่าสุด):** TM-05b → TM-05d → TM-05c → QR-03 → TM-07b → TM-09b → TM-01a → TM-12b
+
+**QA ผ่านแล้ว (device จริง — 2026-06-06):**
+- ✅ **TM-05b** — Join + QR จำลองชำระ: dialog ปิดครั้งเดียว, ไม่จอดำ, ไป `/my-game-user`
+- ✅ **TM-05c** — ยกเลิก QR dialog → cancel จอง
+- ✅ **TM-05d** — race double pop ไม่จอดำ
+- ✅ **TM-07b** — payment-now + QR จำลองชำระ
+- ✅ **TM-09b** — ผู้จัดเก็บเงิน + QR (`expense_panel`): จำลองชำระสำเร็จ, บิลอัปเดต
+
+### 11.2 P0 Checklist (ย่อ)
+
+| ID | โฟลว์ | ผ่านเมื่อ |
+|----|------|----------|
+| TM-01 | สมัคร + OTP | สมัครคนที่ 2+ ไม่ duplicate key; OTP ผิดมี error ชัด |
+| TM-02 | Login รหัสผ่าน | token ทัน; รหัสผิดไม่ crash |
+| TM-03 | Social → ผูกเบอร์ | first-time → phone link; ซ้ำ → Home ตรง |
+| TM-04 | Token refresh | locking ไม่ยิงซ้ำ; invalid → logout |
+| TM-05 | Join + QR | ปุ่มส้ม/แตะ QR → ปิด dialog ครั้งเดียว → `/my-game-user` ไม่จอดำ |
+| TM-06 | Join + Wallet | หัก wallet; ผู้จัดได้ค่าสนาม |
+| TM-07 | payment-now + QR | parse billId/qrCode; จำลองสำเร็จ → navigate |
+| TM-08 | ยกเลิกหลังไม่จ่าย QR | cancel API; race จ่ายแล้ว → success |
+| TM-09 | ผู้จัดเก็บเงิน + QR | expense_panel / history_organizer_payment |
+| TM-10 | Xendit webhook จริง | บิล paid + SignalR ปิด dialog |
+| TM-11 | SignalR QrPaymentSuccess | reconnect; billId ไม่ตรงไม่ปิดผิด |
+| TM-12 | Timer หลายคอร์ท | แต่ละคอร์ทนับแยก |
+
+### 11.3 Regression checks (ทุก P0)
+
+1. JSON parse รองรับ camelCase + PascalCase  
+2. ไม่ silent fail เมื่อ `billId <= 0`  
+3. Dialog + navigation ไม่ double pop  
+4. `mounted` ก่อน `setState`/`go` หลัง async  
+5. SignalR race → `_dialogClosed`  
+6. Test flags ปิดบน PROD  
+
+### 11.4 Code Audit — P0 (2026-06-06)
+
+| ไฟล์ | สถานะ | หมายเหตุ |
+|------|--------|----------|
+| `qr_payment_dialog.dart` | ✅ | `_closeDialog`, simulate API, ปุ่มทดสอบ; `_myUserId` unused (warning เท่านั้น) |
+| `payment.dart` | ✅ | parse + cancel race + `addPostFrameCallback`; payment status ยังอ่านแค่ `status` camelCase |
+| `payment_now.dart` | ✅ | parse + navigate `/my-game-user` + postFrameCallback (แก้แล้ว) |
+| `response_parsers.dart` | ✅ | billId + qrCode dual-case |
+| `expense_panel.dart` | ✅ | ใช้ `response_parsers` แล้ว (แก้ในรอบ audit) |
+| `history_organizer_payment.dart` | ✅ | ใช้ `parseResponseQrCode` |
+| `PlayerGameSessionsController.cs` | ✅ | simulate gated; auth bill owner OR organizer |
+| `PlayerGameSessionService.cs` (Join) | ✅ | สร้างบิล + QR เมื่อ totalAmount > 0 |
+| `MatchManagementService.Billing.cs` | ✅ | webhook idempotent; SignalR user + group |
+| `AuthService.cs` | ✅ | per-user OTP bypass key; safe delete |
+| `manage_game.dart` (resume) | ✅ | re-join SignalR group + fetch live state หลัง sleep; auto-match/end-game fallback API |
+| `game_player.dart` (resume) | ✅ | เหมือน organizer — re-join + fetch หลัง resume |
+| `booking_confirm.dart` | ⚠️ | `PlayerCheckedIn` → `Navigator.pop()` ไม่มี guard |
+| `payment_cancel.dart` | ❌ | mock UI ไม่เชื่อม API |
+| `api_provider.dart` | ✅ | token refresh lock (ไม่ได้ไล่ละเอียดในรอบนี้) |
 
 ## 10. Next Steps (Roadmap)
 > หมายเหตุ: DB migration ทั้ง 3 ไฟล์ + `Xendit:WebhookVerificationToken` — **ทีมตั้งค่าใน environment แล้ว** (deploy ยังต้อง verify smoke test ตามรายการด้านล่าง)  
@@ -657,6 +749,8 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
    - ~~Apply SQL migration บน DB production (`OrganizerAutoMatchPresets`)~~ + `UserDeletedAt` + reports/blocks — **รันแล้วใน env ที่ใช้**
    - ~~ตั้ง `Xendit:WebhookVerificationToken` (กัน webhook spoof)~~ — **ตั้งแล้ว**
    - ทดสอบ flow login user เก่า → BCrypt lazy upgrade ทำงานถูก (smoke test ก่อน release)
+   - **QA P0:** รัน test matrix §11.2 บน device จริง (เริ่ม TM-05 join+QR) ก่อนปิด test flags
+   - **ก่อน production:** `kAllowSimulateQrTap=false`, `AllowSimulateQrPayment=false`, `BypassOtp=false`
 2. **Social Login Phase 1 — ใส่ keys**: ดู `docs/SOCIAL_LOGIN_SETUP.md`
    - ✅ **Google:** `Auth:Google:{IosClientId, AndroidClientId, WebClientId}` + Flutter `googleServerClientId` / `googleIosClientId`; Android SHA-1 + `google-services.json` — **ทำแล้ว**
    - ⏳ **Apple:** ต้อง Apple Developer Program (จ่ายรายปี); จากนั้นตั้ง `Auth:Apple:*`, capability Xcode, และ (iOS) URL scheme Google ตามเอกสาร

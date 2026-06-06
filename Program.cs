@@ -234,6 +234,26 @@ if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Staging"))
 
 app.UseCors(MyAllowSpecificOrigins);
 
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        var ex = feature?.Error;
+        if (ex != null)
+            Console.WriteLine($"[API-UNHANDLED] {ex}");
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await context.Response.WriteAsJsonAsync(new DropInBadAPI.Models.Response<object>
+        {
+            Status = 500,
+            Message = "เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง",
+            Data = null
+        });
+    });
+});
+
 app.UseStaticFiles();
 
 app.UseAuthentication();

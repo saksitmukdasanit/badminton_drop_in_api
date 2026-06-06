@@ -36,6 +36,12 @@ namespace DropInBadAPI.Dtos
         public string CurrentUserStatus { get; set; }
     }
 
+    /// <summary>โหมดทดสอบ — จำลอง webhook QR ชำระสำเร็จ (ดู Payment:AllowSimulateQrPayment)</summary>
+    public class SimulateQrPaymentRequestDto
+    {
+        public decimal Amount { get; set; }
+    }
+
     public class PlayerJoinSessionRequestDto
     {
         public string PaymentMethod { get; set; } = string.Empty;

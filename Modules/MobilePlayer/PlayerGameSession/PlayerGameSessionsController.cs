@@ -116,6 +116,58 @@ namespace DropInBadAPI.Controllers.MobilePlayer
             return Ok(new Response<PlayerHistoryDetailDto> { Status = 200, Message = "History detail retrieved successfully.", Data = detail });
         }
 
+        /// <summary>
+        /// โหมดทดสอบ: จำลอง webhook QR ชำระสำเร็จ (เปิดด้วย Payment:AllowSimulateQrPayment=true เท่านั้น)
+        /// </summary>
+        [HttpPost("bills/{billId}/simulate-qr-payment")]
+        public async Task<ActionResult<Response<object>>> SimulateQrPayment(int billId, [FromBody] SimulateQrPaymentRequestDto? dto)
+        {
+            var allowSimulate = string.Equals(
+                _configuration["Payment:AllowSimulateQrPayment"], "true", StringComparison.OrdinalIgnoreCase);
+            if (!allowSimulate)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Simulate QR payment is disabled." });
+            }
+
+            var userId = GetCurrentUserId();
+            var bill = await _context.ParticipantBills
+                .AsNoTracking()
+                .Include(b => b.Session)
+                .FirstOrDefaultAsync(b => b.BillId == billId);
+
+            if (bill == null)
+            {
+                return NotFound(new Response<object> { Status = 404, Message = "Bill not found." });
+            }
+
+            // ผู้เล่นเจ้าของบิล หรือผู้จัดก๊วนนั้น — จำลองได้ (โหมดทดสอบ)
+            var isBillOwner = bill.UserId == userId;
+            var isSessionOrganizer = bill.Session.CreatedByUserId == userId;
+            if (!isBillOwner && !isSessionOrganizer)
+            {
+                return Forbid();
+            }
+
+            if (bill.Status == 2)
+            {
+                return Ok(new Response<object> { Status = 200, Message = "Bill already paid.", Data = new { billId } });
+            }
+
+            var amount = dto?.Amount > 0 ? dto.Amount : bill.TotalAmount;
+            var ok = await _matchManagementService.ProcessQrPaymentWebhookAsync($"BILL-{billId}", amount);
+            if (!ok)
+            {
+                return BadRequest(new Response<object> { Status = 400, Message = "Failed to simulate QR payment." });
+            }
+
+            return Ok(new Response<object>
+            {
+                Status = 200,
+                Message = "QR payment simulated successfully.",
+                Data = new { billId, amount }
+            });
+        }
+
         [HttpPost("{id}/join")]
         public async Task<ActionResult<Response<JoinSessionResponseDto>>> JoinSession(int id, [FromBody] PlayerJoinSessionRequestDto dto)
         {

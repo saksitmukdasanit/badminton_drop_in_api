@@ -12,8 +12,14 @@ namespace DropInBadAPI.Repositories
 {
     public class AuthService : IAuthService
     {
-        /// <summary>เก็บใน UserLogins.ProviderKey ขณะ <see cref="UseOtpBypass"/> — ไม่เรียก SMSMKT</summary>
+        /// <summary>Prefix ของ UserLogins.ProviderKey ขณะ bypass OTP — ต่อท้ายด้วย UserId (PK เป็น ProviderName+ProviderKey ทั้งตาราง)</summary>
         private const string OtpBypassMarker = "__OTP_BYPASS__";
+
+        private static string OtpBypassKeyFor(int userId) => $"{OtpBypassMarker}:{userId}";
+
+        private static bool IsOtpBypassProviderKey(string? providerKey, int userId) =>
+            string.Equals(providerKey, OtpBypassKeyFor(userId), StringComparison.Ordinal)
+            || string.Equals(providerKey, OtpBypassMarker, StringComparison.Ordinal);
 
         private readonly BadmintonDbContext _context;
         private readonly IJwtService _jwtService;
@@ -44,59 +50,113 @@ namespace DropInBadAPI.Repositories
         private bool UseOtpBypass() =>
             string.Equals(_configuration["SmsMkt:BypassOtp"], "true", StringComparison.OrdinalIgnoreCase);
 
+        private async Task<(bool Ok, string Error)> RemoveIncompleteRegistrationUserAsync(int userId)
+        {
+            var logins = await _context.UserLogins.Where(ul => ul.UserId == userId).ToListAsync();
+            if (logins.Count > 0) _context.UserLogins.RemoveRange(logins);
+            var fcmTokens = await _context.UserFcmTokens.Where(t => t.UserId == userId).ToListAsync();
+            if (fcmTokens.Count > 0) _context.UserFcmTokens.RemoveRange(fcmTokens);
+            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == userId);
+            if (wallet != null) _context.UserWallets.Remove(wallet);
+            var profile = await _context.UserProfiles.FindAsync(userId);
+            if (profile != null) _context.UserProfiles.Remove(profile);
+            var user = await _context.Users.FindAsync(userId);
+            if (user == null) return (true, string.Empty);
+            _context.Users.Remove(user);
+            try
+            {
+                await _context.SaveChangesAsync();
+                return (true, string.Empty);
+            }
+            catch (DbUpdateException ex)
+            {
+                Console.WriteLine($"[Auth] RemoveIncompleteRegistration userId={userId}: {ex.InnerException?.Message ?? ex.Message}");
+                return (false, "ไม่สามารถลบข้อมูลสมัครค้างได้ กรุณาติดต่อผู้ดูแลระบบ");
+            }
+        }
+
+        private static bool TryParseSmsOtpJson(string responseString, out JsonElement root, out string error)
+        {
+            root = default;
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(responseString)) { error = "SMS provider returned empty response."; return false; }
+            try { using var doc = JsonDocument.Parse(responseString); root = doc.RootElement.Clone(); return true; }
+            catch (JsonException ex) { error = $"Invalid SMS provider response: {ex.Message}"; return false; }
+        }
+
         public async Task<(string? AccessToken, string? RefreshToken, string ErrorMessage)> RegisterAsync(InitiateRegisterDto dto)
         {
-            // 1. ตรวจสอบเบอร์โทรศัพท์ก่อน
-            var existingProfile = await _context.UserProfiles
-                .Include(p => p.User)
-                .FirstOrDefaultAsync(up => up.PhoneNumber == dto.PhoneNumber);
-
-            if (existingProfile != null)
+            try
             {
-                if (existingProfile.IsPhoneNumberVerified)
+                if (string.IsNullOrWhiteSpace(dto.PhoneNumber)
+                    || string.IsNullOrWhiteSpace(dto.Username)
+                    || string.IsNullOrWhiteSpace(dto.Password))
                 {
-                    return (null, null, "Phone number already exists.");
+                    return (null, null, "กรุณากรอกข้อมูลให้ครบถ้วน");
                 }
-                // ถ้ามีเบอร์แต่ยังไม่ยืนยัน (สมัครค้างไว้) ให้ลบข้อมูลเก่าทิ้งเพื่อสมัครใหม่
-                _context.Users.Remove(existingProfile.User);
+
+                var phoneNumber = dto.PhoneNumber.Trim();
+                var username = dto.Username.Trim();
+
+                var existingProfile = await _context.UserProfiles
+                    .Include(p => p.User)
+                    .FirstOrDefaultAsync(up => up.PhoneNumber == phoneNumber);
+
+                if (existingProfile != null)
+                {
+                    if (existingProfile.IsPhoneNumberVerified)
+                        return (null, null, "เบอร์โทรนี้ถูกใช้งานแล้ว");
+
+                    var (removed, removeError) = await RemoveIncompleteRegistrationUserAsync(existingProfile.UserId);
+                    if (!removed) return (null, null, removeError);
+                }
+
+                if (await _context.UserLogins.AnyAsync(ul => ul.ProviderKey == username && ul.ProviderName == "Local"))
+                    return (null, null, "ชื่อผู้ใช้นี้ถูกใช้งานแล้ว");
+
+                var passwordHash = _passwordHasher.Hash(dto.Password);
+                var newUser = new User { IsActive = true };
+                _context.Users.Add(newUser);
                 await _context.SaveChangesAsync();
+
+                _context.UserProfiles.Add(new UserProfile
+                {
+                    UserId = newUser.UserId,
+                    PhoneNumber = phoneNumber,
+                    IsPhoneNumberVerified = false
+                });
+
+                var userLogin = new UserLogin
+                {
+                    ProviderName = "Local",
+                    ProviderKey = username,
+                    PasswordHash = passwordHash,
+                    UserId = newUser.UserId
+                };
+
+                var refreshToken = _jwtService.CreateRefreshToken();
+                userLogin.RefreshToken = refreshToken;
+                userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(90);
+                _context.UserLogins.Add(userLogin);
+                await _context.SaveChangesAsync();
+
+                var accessToken = _jwtService.CreateAccessToken(newUser);
+                var (otpSuccess, otpMessage) = await ResendOtpAsync(phoneNumber);
+                if (!otpSuccess)
+                    return (null, null, "สมัครสมาชิกสำเร็จ แต่ส่ง OTP ไม่ผ่าน: " + otpMessage);
+
+                return (accessToken, refreshToken, string.Empty);
             }
-
-            // 2. ตรวจสอบ Username (หลังจากเคลียร์ User เก่าที่ค้างอยู่แล้ว)
-            if (await _context.UserLogins.AnyAsync(ul => ul.ProviderKey == dto.Username && ul.ProviderName == "Local"))
-                return (null, null, "Username already exists.");
-
-            var passwordHash = _passwordHasher.Hash(dto.Password);
-
-            var newUser = new User { IsActive = true }; // Active ได้เลย
-            _context.Users.Add(newUser);
-            await _context.SaveChangesAsync();
-
-            _context.UserProfiles.Add(new UserProfile { UserId = newUser.UserId, PhoneNumber = dto.PhoneNumber, IsPhoneNumberVerified = false }); // ยังไม่ Verify
-
-            var userLogin = new UserLogin { ProviderName = "Local", ProviderKey = dto.Username, PasswordHash = passwordHash, UserId = newUser.UserId };
-
-            // สร้างและบันทึก Refresh Token
-            var refreshToken = _jwtService.CreateRefreshToken();
-            userLogin.RefreshToken = refreshToken;
-            userLogin.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(90);
-            _context.UserLogins.Add(userLogin);
-
-            await _context.SaveChangesAsync();
-
-            // สร้าง Access Token แล้วส่งกลับไป
-            var accessToken = _jwtService.CreateAccessToken(newUser);
-
-            // ส่ง OTP ทันทีเมื่อสมัครเสร็จ
-            var (otpSuccess, otpMessage) = await ResendOtpAsync(dto.PhoneNumber);
-            if (!otpSuccess)
+            catch (DbUpdateException ex)
             {
-                // ถ้าส่ง OTP ไม่ผ่าน ให้แจ้ง Error กลับไปทันที
-                // (User จะถูกลบอัตโนมัติเมื่อสมัครใหม่ในครั้งถัดไป ตาม Logic ที่เพิ่มไว้ก่อนหน้า)
-                return (null, null, "สมัครสมาชิกสำเร็จ แต่ส่ง OTP ไม่ผ่าน: " + otpMessage);
+                Console.WriteLine($"[Auth] Register DB error: {ex.InnerException?.Message ?? ex.Message}");
+                return (null, null, "ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้งหรือติดต่อผู้ดูแลระบบ");
             }
-
-            return (accessToken, refreshToken, string.Empty);
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Auth] Register error: {ex}");
+                return (null, null, "เกิดข้อผิดพลาดระหว่างสมัครสมาชิก กรุณาลองใหม่อีกครั้ง");
+            }
         }
 
         public async Task<(bool Success, string ErrorMessage)> CompleteUserProfileAsync(int userId, CompleteProfileDto dto)
@@ -336,6 +396,7 @@ namespace DropInBadAPI.Repositories
 
             if (UseOtpBypass())
             {
+                var bypassKey = OtpBypassKeyFor(userProfile.UserId);
                 var otpEntry = await _context.UserLogins
                     .FirstOrDefaultAsync(ul => ul.UserId == userProfile.UserId && ul.ProviderName == "SMSMKT");
                 if (otpEntry == null)
@@ -344,14 +405,22 @@ namespace DropInBadAPI.Repositories
                     {
                         UserId = userProfile.UserId,
                         ProviderName = "SMSMKT",
-                        ProviderKey = OtpBypassMarker,
+                        ProviderKey = bypassKey,
                         PasswordHash = string.Empty
                     };
                     _context.UserLogins.Add(otpEntry);
                 }
-                else
+                else if (!string.Equals(otpEntry.ProviderKey, bypassKey, StringComparison.Ordinal))
                 {
-                    otpEntry.ProviderKey = OtpBypassMarker;
+                    // ProviderKey เป็นส่วนหนึ่งของ PK — เปลี่ยนค่าได้โดยลบแล้วสร้างใหม่
+                    _context.UserLogins.Remove(otpEntry);
+                    _context.UserLogins.Add(new UserLogin
+                    {
+                        UserId = userProfile.UserId,
+                        ProviderName = "SMSMKT",
+                        ProviderKey = bypassKey,
+                        PasswordHash = string.Empty
+                    });
                 }
 
                 userProfile.Otpcode = "BYPASS";
@@ -382,34 +451,42 @@ namespace DropInBadAPI.Repositories
                 new KeyValuePair<string, string>("phone", phoneNumber)
             });
 
-            var response = await client.PostAsync("https://portal-otp.smsmkt.com/api/otp-send", content);
-            var responseString = await response.Content.ReadAsStringAsync();
+            HttpResponseMessage response;
+            try
+            {
+                response = await client.PostAsync("https://portal-otp.smsmkt.com/api/otp-send", content);
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"SMSMKT Send OTP network error: {ex.Message}");
+                return (false, "ไม่สามารถเชื่อมต่อ SMS provider ได้ กรุณาลองใหม่");
+            }
 
-            // เพิ่ม Log เพื่อดูการตอบกลับจาก SMSMKT
+            var responseString = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"SMSMKT Send OTP Response: {responseString}");
-            
-            // ตัวอย่าง Response: { "code": "200", "result": { "token": "...", "ref_code": "..." } }
-            using var doc = JsonDocument.Parse(responseString);
-            var root = doc.RootElement;
-            
-            // --- FIX: เปลี่ยนจาก "200" เป็น "000" ---
-            if (root.GetProperty("code").GetString() == "000")
+
+            if (!TryParseSmsOtpJson(responseString, out var root, out var parseError))
+            {
+                Console.WriteLine($"SMSMKT Send OTP parse error: {parseError}");
+                return (false, "ส่ง OTP ไม่สำเร็จ (รูปแบบตอบกลับจาก SMS ไม่ถูกต้อง)");
+            }
+
+            if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() == "000")
             {
                 var token = root.GetProperty("result").GetProperty("token").GetString();
-                var refCode = root.GetProperty("result").GetProperty("ref_code").GetString(); // ดึง Ref Code
-                
-                // 3. เก็บ Token ลง DB (ใช้ UserLogins เป็นที่เก็บชั่วคราว ProviderName="SMSMKT")
+                var refCode = root.GetProperty("result").GetProperty("ref_code").GetString();
+
                 var otpEntry = await _context.UserLogins
                     .FirstOrDefaultAsync(ul => ul.UserId == userProfile.UserId && ul.ProviderName == "SMSMKT");
 
                 if (otpEntry == null)
                 {
-                    otpEntry = new UserLogin 
-                    { 
-                        UserId = userProfile.UserId, 
-                        ProviderName = "SMSMKT", 
-                        ProviderKey = token!, // เก็บ Token ไว้ที่นี่
-                        PasswordHash = "" // ไม่ใช้
+                    otpEntry = new UserLogin
+                    {
+                        UserId = userProfile.UserId,
+                        ProviderName = "SMSMKT",
+                        ProviderKey = token!,
+                        PasswordHash = ""
                     };
                     _context.UserLogins.Add(otpEntry);
                 }
@@ -418,15 +495,12 @@ namespace DropInBadAPI.Repositories
                     otpEntry.ProviderKey = token!;
                 }
 
-                // บันทึก Ref Code ลงใน UserProfile (เผื่อใช้แสดงผล)
                 userProfile.Otpcode = refCode;
                 userProfile.UpdatedDate = DateTime.UtcNow;
-
                 await _context.SaveChangesAsync();
                 return (true, "OTP sent successfully.");
             }
 
-            // --- FIX: เปลี่ยนจาก "message" เป็น "detail" ---
             return (false, "Failed to send OTP: " + (root.TryGetProperty("detail", out var msg) ? msg.GetString() : "Unknown error"));
         }
 
@@ -463,7 +537,7 @@ namespace DropInBadAPI.Repositories
             var otpEntry = hit.Otp;
             var userProfile = hit.Profile;
 
-            if (UseOtpBypass() && string.Equals(otpEntry.ProviderKey, OtpBypassMarker, StringComparison.Ordinal))
+            if (UseOtpBypass() && IsOtpBypassProviderKey(otpEntry.ProviderKey, userProfile.UserId))
             {
                 if (string.IsNullOrWhiteSpace(otp) || otp.Trim().Length < 6)
                 {
@@ -497,23 +571,30 @@ namespace DropInBadAPI.Repositories
                 // new KeyValuePair<string, string>("ref_code", userProfile.Otpcode ?? ""), // ref_code ไม่จำเป็นสำหรับการ validate
             });
 
-            var response = await client.PostAsync("https://portal-otp.smsmkt.com/api/otp-validate", content);
-            var responseString = await response.Content.ReadAsStringAsync();
+            HttpResponseMessage response;
+            try
+            {
+                response = await client.PostAsync("https://portal-otp.smsmkt.com/api/otp-validate", content);
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"SMSMKT Verify OTP network error: {ex.Message}");
+                return (false, "ไม่สามารถเชื่อมต่อ SMS provider ได้ กรุณาลองใหม่");
+            }
 
-            // เพิ่ม Log เพื่อดูการตอบกลับ
+            var responseString = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"SMSMKT Verify OTP Response: {responseString}");
 
-            using var doc = JsonDocument.Parse(responseString);
-            var root = doc.RootElement;
-
-            if (root.GetProperty("code").GetString() == "000")
+            if (!TryParseSmsOtpJson(responseString, out var root, out var parseError))
             {
-                // 3. ยืนยันสำเร็จ -> อัปเดตสถานะ User
+                Console.WriteLine($"SMSMKT Verify OTP parse error: {parseError}");
+                return (false, "ยืนยัน OTP ไม่สำเร็จ (รูปแบบตอบกลับจาก SMS ไม่ถูกต้อง)");
+            }
+
+            if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() == "000")
+            {
                 userProfile.IsPhoneNumberVerified = true;
-                
-                // ลบ Token ออกเพื่อความสะอาด
                 _context.UserLogins.Remove(otpEntry);
-                
                 await _context.SaveChangesAsync();
                 return (true, "Phone number verified successfully.");
             }
