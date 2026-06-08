@@ -694,6 +694,8 @@ Ref: "Users"."UserID" < "UserFcmTokens"."UserID"
 - ✅ **TM-05d** — race double pop ไม่จอดำ
 - ✅ **TM-07b** — payment-now + QR จำลองชำระ
 - ✅ **TM-09b** — ผู้จัดเก็บเงิน + QR (`expense_panel`): จำลองชำระสำเร็จ, บิลอัปเดต
+- ✅ **Manage sleep/resume** — หลัง sleep: จบเกม + จัดออโต้ แสดงคนในสนามทันที (ไม่ต้องออกเข้าหน้าใหม่)
+- ✅ **Court pause isolation** — หยุดชั่วคราวสนาม A แล้วเริ่มสนาม B: A ยัง pause จนกดเริ่มต่อเอง
 
 ### 11.2 P0 Checklist (ย่อ)
 
