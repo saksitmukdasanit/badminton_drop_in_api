@@ -149,6 +149,7 @@ builder.Services.AddScoped<IAutoMatchPresetService, AutoMatchPresetService>();
 builder.Services.AddScoped<IGameSessionService, GameSessionService>();
 builder.Services.AddScoped<IRecurringGameTemplateService, RecurringGameTemplateService>();
 builder.Services.AddHostedService<RecurringSessionGenerationHostedService>();
+builder.Services.AddHostedService<ExpiredSessionCancellationHostedService>(); // Auto-Cancel ก๊วนหมดเวลา + คืนเงินผู้เล่น
 builder.Services.AddScoped<IMatchManagementService, MatchManagementService>();
 builder.Services.AddScoped<IMatchRecommenderService, MatchRecommenderService>();
 builder.Services.AddScoped<IProfileService, ProfileService>();

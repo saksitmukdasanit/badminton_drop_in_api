@@ -1135,5 +1135,139 @@ namespace DropInBadAPI.Service.Mobile.Game
 
         public Task<(bool Success, string ErrorMessage)> MovePlayersAsync(int sessionId, int organizerUserId, MovePlayersRequestDto dto)
             => _autoMatchService.MovePlayersAsync(sessionId, organizerUserId, dto);
+
+        /// <summary>
+        /// Background Job: สแกนก๊วนที่เลย EndTime แล้วแต่ผู้จัดยังไม่ได้กดเริ่ม (Status=1)
+        /// ระบบจะ Auto-Cancel + คืนเงินผู้เล่นทุกคนอัตโนมัติ
+        /// </summary>
+        public async Task<int> AutoCancelExpiredSessionsAsync(CancellationToken ct = default)
+        {
+            // ใช้เวลาไทย (UTC+7) เทียบกับ SessionDate + EndTime
+            var nowThai = DateTime.UtcNow.AddHours(7);
+            var todayThai = DateOnly.FromDateTime(nowThai);
+            var currentTimeThai = TimeOnly.FromDateTime(nowThai);
+
+            // ค้นหาก๊วนที่:
+            // 1. Status = 1 (Open, ยังไม่เริ่ม)
+            // 2. วันจัดเป็นอดีต (SessionDate < วันนี้) หรือ วันนี้แต่เวลา EndTime ผ่านไปแล้ว
+            var expiredSessions = await _context.GameSessions
+                .Include(s => s.ParticipantBills).ThenInclude(b => b.BillLineItems)
+                .Include(s => s.SessionParticipants)
+                .Where(s => s.Status == 1 &&
+                    (s.SessionDate < todayThai ||
+                     (s.SessionDate == todayThai && s.EndTime <= currentTimeThai)))
+                .ToListAsync(ct);
+
+            int cancelledCount = 0;
+
+            foreach (var session in expiredSessions)
+            {
+                try
+                {
+                    session.Status = 3; // Cancelled
+                    session.UpdatedDate = DateTime.UtcNow;
+
+                    // --- คืนเงินผู้เล่นทุกคนที่จ่ายแล้ว (เหมือน CancelSessionByOrganizerAsync) ---
+                    var paidBills = session.ParticipantBills.Where(b => b.Status == 2).ToList();
+
+                    foreach (var bill in paidBills)
+                    {
+                        if (bill.UserId.HasValue && bill.TotalAmount > 0)
+                        {
+                            int refundUserId = bill.UserId.Value;
+                            decimal refundAmount = bill.TotalAmount;
+
+                            // 1. คืนเงินเข้า Wallet ผู้เล่น
+                            var wallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == refundUserId, ct);
+                            if (wallet == null)
+                            {
+                                wallet = new UserWallet { UserId = refundUserId, Balance = 0 };
+                                await _context.UserWallets.AddAsync(wallet, ct);
+                            }
+                            wallet.Balance += refundAmount;
+                            wallet.UpdatedDate = DateTime.UtcNow;
+
+                            // 2. ดึงเงินกลับจาก Wallet ผู้จัด (เฉพาะส่วนที่โอนให้ผู้จัดไป ไม่รวมค่าธรรมเนียม)
+                            var serviceFeeItem = bill.BillLineItems.FirstOrDefault(li => li.Description == "ค่าธรรมเนียม");
+                            decimal serviceFee = serviceFeeItem?.Amount ?? 0;
+                            decimal amountToDeductFromOrg = refundAmount - serviceFee;
+
+                            if (amountToDeductFromOrg > 0)
+                            {
+                                var orgWallet = await _context.UserWallets.FirstOrDefaultAsync(w => w.UserId == session.CreatedByUserId, ct);
+                                if (orgWallet == null)
+                                {
+                                    orgWallet = new UserWallet { UserId = session.CreatedByUserId, Balance = 0 };
+                                    await _context.UserWallets.AddAsync(orgWallet, ct);
+                                }
+                                orgWallet.Balance -= amountToDeductFromOrg;
+                                orgWallet.UpdatedDate = DateTime.UtcNow;
+                                await _context.WalletTransactions.AddAsync(new WalletTransaction
+                                {
+                                    Wallet = orgWallet,
+                                    Amount = amountToDeductFromOrg,
+                                    TransactionType = 2, // OUT
+                                    Description = $"หักเงินคืนผู้เล่น (ก๊วนหมดเวลา): {session.GroupName}",
+                                    ReferenceId = session.SessionId
+                                }, ct);
+                            }
+
+                            // 3. สร้างประวัติ Transaction ฝั่งผู้เล่น
+                            await _context.WalletTransactions.AddAsync(new WalletTransaction
+                            {
+                                Wallet = wallet,
+                                Amount = refundAmount,
+                                TransactionType = 1, // IN (Refund)
+                                Description = $"คืนเงิน (ก๊วนหมดเวลาโดยผู้จัดไม่ได้เริ่มจัด): {session.GroupName}",
+                                ReferenceId = session.SessionId,
+                            }, ct);
+
+                            // 4. เปลี่ยนสถานะบิลเป็น Cancelled
+                            bill.Status = 3;
+                        }
+                    }
+
+                    // --- แจ้งเตือนผู้เล่นทุกคนในก๊วน ---
+                    var participantUserIds = session.SessionParticipants
+                        .Where(p => p.Status != 3)
+                        .Select(p => p.UserId)
+                        .ToList();
+
+                    foreach (var userId in participantUserIds)
+                    {
+                        await _notificationService.SendNotificationAsync(
+                            userId,
+                            "ก๊วนถูกยกเลิกอัตโนมัติ",
+                            $"ก๊วน '{session.GroupName}' ถูกยกเลิกเนื่องจากผู้จัดไม่ได้เริ่มจัดก๊วน เงินค่าสนามได้ถูกคืนเข้ากระเป๋าของคุณแล้ว",
+                            "SESSION_AUTO_CANCELLED",
+                            session.SessionId
+                        );
+                    }
+
+                    // --- แจ้งเตือนผู้จัดด้วย ---
+                    await _notificationService.SendNotificationAsync(
+                        session.CreatedByUserId,
+                        "ก๊วนถูกยกเลิกอัตโนมัติ",
+                        $"ก๊วน '{session.GroupName}' ถูกยกเลิกโดยระบบเนื่องจากเลยเวลาจัดแล้วแต่ไม่ได้กดเริ่ม",
+                        "SESSION_AUTO_CANCELLED",
+                        session.SessionId
+                    );
+
+                    cancelledCount++;
+                }
+                catch (Exception)
+                {
+                    // Log error but continue processing other sessions
+                    continue;
+                }
+            }
+
+            if (cancelledCount > 0)
+            {
+                await _context.SaveChangesAsync(ct);
+            }
+
+            return cancelledCount;
+        }
     }
 }

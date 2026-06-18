@@ -25,5 +25,7 @@ namespace DropInBadAPI.Service.Mobile.Game
         Task<(bool Success, string ErrorMessage)> SwapPlayersAsync(int sessionId, int organizerUserId, SwapPlayersRequestDto dto);
         Task<(bool Success, string ErrorMessage)> AssignReserveToCourtAsync(int sessionId, int organizerUserId, AssignReserveRequestDto dto);
         Task<(bool Success, string ErrorMessage)> MovePlayersAsync(int sessionId, int organizerUserId, MovePlayersRequestDto dto);
+        /// <summary>สแกนก๊วนที่เลยเวลา EndTime แล้วยังไม่ได้เริ่ม (Status=1) แล้ว Auto-Cancel + คืนเงินผู้เล่นทุกคน</summary>
+        Task<int> AutoCancelExpiredSessionsAsync(CancellationToken ct = default);
     }
 }
